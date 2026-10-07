@@ -96,6 +96,7 @@ public enum HSLog {
  ```swift
  HeroSignal.initialize("app_…", launchOptions: launchOptions) { $0.apiUrl = "https://api.example.com" }
  HeroSignal.Notifications.requestPermission { accepted in }
+ let token = HeroSignal.Notifications.addPermissionObserver { granted in }
  HeroSignal.login("user_42")
  HeroSignal.User.addTag("plan", "pro")
  HeroSignal.User.addEmail("ali@example.com")
@@ -115,8 +116,9 @@ public enum HeroSignal {
     static var errorFlushScheduled = false
     static var identityVerificationRequired = false
     static var sessionStartedAt: Date?
-    static var clickListeners: [(HSClickEvent) -> Void] = []
-    static var foregroundListeners: [(HSForegroundEvent) -> Void] = []
+    static let clickListeners = HSListenerRegistry<HSClickEvent>()
+    static let foregroundListeners = HSListenerRegistry<HSForegroundEvent>()
+    static let permissionTracker = HSPermissionTracker()
     static var subscriptionObservers: [(HSPushSubscriptionState) -> Void] = []
     static var pendingClick: HSClickEvent?
     static let delegate = HSNotificationDelegate()
@@ -143,6 +145,8 @@ public enum HeroSignal {
         // Düğmesiz bildirimlerin kapatılma (dismissed) geri bildirimi için; mevcut kategoriler korunur.
         Task { await HSCategories.register(HSCategories.category(identifier: HSCategories.defaultIdentifier, actions: [])) }
         observeLifecycle()
+        // İzin gözlemcileri için temel değer (yalnızca sonraki değişiklikler bildirilir).
+        checkPermissionChange()
         if let userInfo = launchOptions?[.remoteNotification] as? [AnyHashable: Any], let n = HSNotification(userInfo: userInfo) {
             // Uygulama bildirimden açıldı
             reportOpened(n, actionId: nil)
@@ -480,8 +484,10 @@ public enum HeroSignal {
             sessionStartedAt = Date()
             enqueue(["type": "session_start", "at": Date().timeIntervalSince1970])
             inApp.onSessionStart()
-            if let click = pendingClick, !clickListeners.isEmpty { pendingClick = nil; clickListeners.forEach { $0(click) } }
+            if let click = pendingClick, !clickListeners.isEmpty { pendingClick = nil; clickListeners.notify(click) }
             Task { await flushPendingReceived() }
+            // Kullanıcı izni Ayarlar'dan değiştirmiş olabilir.
+            checkPermissionChange()
         })
         observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
             guard let started = sessionStartedAt else { return }
@@ -507,7 +513,7 @@ public enum HeroSignal {
             enqueue(["type": "opened", "delivery_id": id, "button_id": actionId ?? "", "at": Date().timeIntervalSince1970])
         }
         let event = HSClickEvent(notification: n, actionId: actionId, url: n.url(forAction: actionId))
-        if clickListeners.isEmpty { pendingClick = event } else { clickListeners.forEach { $0(event) } }
+        if clickListeners.isEmpty { pendingClick = event } else { clickListeners.notify(event) }
         if let urlString = event.url, let url = URL(string: urlString), url.scheme?.hasPrefix("http") == true {
             Task { @MainActor in UIApplication.shared.open(url) }
         }
@@ -517,6 +523,35 @@ public enum HeroSignal {
         Task {
             let s = await User.pushSubscription.state()
             subscriptionObservers.forEach { $0(s) }
+        }
+    }
+
+    /**
+     Etkin izni yeniden ölçer; değiştiyse izin gözlemcileri ana iş parçacığında çağrılır, izin verildiyse APNs kaydı
+     yenilenir, kayıtlı aboneliğin cihaz bilgisi (`push_capable`) güncellenir ve abonelik gözlemcileri bilgilendirilir.
+     İlk çağrı yalnızca temel değeri kaydeder.
+     */
+    static func checkPermissionChange() {
+        Task {
+            let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+            let granted = HSPermissionTracker.isGranted(status)
+            let changed = await MainActor.run { permissionTracker.update(granted) }
+            guard changed else { return }
+            if granted { await MainActor.run { UIApplication.shared.registerForRemoteNotifications() } }
+            await syncPermissionState()
+            notifySubscription()
+        }
+    }
+
+    /// İzin değişikliğini kayıtlı aboneliğe yansıtır (gizlilik onayı bekleniyorsa ağ çağrısı yapılmaz).
+    static func syncPermissionState() async {
+        guard let store = storage, let api, let subId = store.subscriptionId else { return }
+        if options.requiresPrivacyConsent && !store.consentGiven { return }
+        do {
+            _ = try await api.request("PATCH", "/subscriptions/\(subId)", body: HSOwnership.withProof(["device": await deviceInfo()], registeredToken: store.registeredToken))
+        } catch {
+            HSLog.log(.warn, "izin sonrası abonelik güncellenemedi: \(error)")
+            reportError("subscription_update_failed", "izin sonrası abonelik güncellenemedi", error: error)
         }
     }
 
@@ -664,7 +699,7 @@ public enum HeroSignal {
     }
 
     public enum Notifications {
-        /// Sistem izni ister; kabul edilirse APNs kaydı başlar.
+        /// Sistem izni ister; kabul edilirse APNs kaydı başlar. Durum değiştiyse izin gözlemcileri de çağrılır.
         public static func requestPermission(_ completion: ((Bool) -> Void)? = nil) {
             var optionsSet: UNAuthorizationOptions = [.alert, .badge, .sound]
             if options.provisionalAuthorization { optionsSet.insert(.provisional) }
@@ -672,17 +707,44 @@ public enum HeroSignal {
                 if let error { HSLog.log(.warn, "izin hatası: \(error.localizedDescription)") }
                 if granted { DispatchQueue.main.async { UIApplication.shared.registerForRemoteNotifications() } }
                 notifySubscription()
+                checkPermissionChange()
                 completion?(granted)
             }
         }
         public static func permission() async -> UNAuthorizationStatus {
             await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         }
-        public static func addClickListener(_ listener: @escaping (HSClickEvent) -> Void) {
-            clickListeners.append(listener)
-            if let click = pendingClick { pendingClick = nil; listener(click) }
+
+        /// Bildirim gösterilebilir mi (tam veya geçici izin); son bilinen değer, henüz ölçülmediyse sistemden okunur.
+        public static func isPermissionGranted() async -> Bool {
+            if let known = permissionTracker.lastKnown { return known }
+            return HSPermissionTracker.isGranted(await permission())
         }
-        public static func addForegroundLifecycleListener(_ listener: @escaping (HSForegroundEvent) -> Void) { foregroundListeners.append(listener) }
+
+        /**
+         İzin gözlemcisi (eski sağlayıcı `addPermissionObserver` eşdeğeri): etkin izin (tam/geçici) değiştiğinde ana iş
+         parçacığında `granted` ile çağrılır — `requestPermission` sonrası ve uygulama yeniden etkinleştiğinde
+         (`didBecomeActiveNotification`; izin Ayarlar'dan değişmiş olabilir). İlk durum bildirilmez.
+         */
+        @discardableResult
+        public static func addPermissionObserver(_ observer: @escaping (Bool) -> Void) -> HSListenerToken {
+            permissionTracker.observers.add(observer)
+        }
+        public static func removePermissionObserver(_ token: HSListenerToken) { _ = permissionTracker.observers.remove(token) }
+
+        @discardableResult
+        public static func addClickListener(_ listener: @escaping (HSClickEvent) -> Void) -> HSListenerToken {
+            let token = clickListeners.add(listener)
+            if let click = pendingClick { pendingClick = nil; listener(click) }
+            return token
+        }
+        public static func removeClickListener(_ token: HSListenerToken) { _ = clickListeners.remove(token) }
+
+        @discardableResult
+        public static func addForegroundLifecycleListener(_ listener: @escaping (HSForegroundEvent) -> Void) -> HSListenerToken {
+            foregroundListeners.add(listener)
+        }
+        public static func removeForegroundLifecycleListener(_ token: HSListenerToken) { _ = foregroundListeners.remove(token) }
 
         /// Uygulama rozetini ayarlar ve NSE ile paylaşılan sayacı eşitler (`badge_inc` bu değerin üzerine eklenir).
         public static func setBadgeCount(_ count: Int) {
@@ -838,7 +900,7 @@ final class HSNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         let event = HSForegroundEvent(notification: n) { show in
             completionHandler(show ? [.banner, .sound, .badge, .list] : [])
         }
-        HeroSignal.foregroundListeners.forEach { $0(event) }
+        HeroSignal.foregroundListeners.notify(event)
         if !event.prevented {
             event.complete(true)
         } else {

@@ -704,6 +704,20 @@ public enum HeroSignal {
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
             clearBadge()
         }
+
+        /// Aynı `thread-id`'ye (sunucuda `thread_id` / `android_group`) sahip tüm bildirimleri bildirim merkezinden kaldırır.
+        public static func removeGroupedNotifications(_ threadId: String) {
+            let center = UNUserNotificationCenter.current()
+            center.getDeliveredNotifications { delivered in
+                let ids = delivered.filter { $0.request.content.threadIdentifier == threadId }.map { $0.request.identifier }
+                if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+            }
+        }
+
+        /// Tek bir bildirimi istek kimliğiyle (`UNNotificationRequest.identifier`) bildirim merkezinden kaldırır.
+        public static func removeNotification(identifier: String) {
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+        }
     }
 
     public enum Session {

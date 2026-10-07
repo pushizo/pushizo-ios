@@ -37,6 +37,8 @@ public final class HeroSignalNotificationServiceExtension {
     }
 
     public func didReceive(_ request: UNNotificationRequest, withContentHandler handler: @escaping (UNNotificationContent) -> Void) {
+        // `mutableCopy` sistemin `aps` alanlarından doldurduğu threadIdentifier (`thread-id`), relevanceScore
+        // (`relevance-score`) ve targetContentIdentifier (`target-content-id`) değerlerini korur; NSE bunları değiştirmez.
         guard let mutable = request.content.mutableCopy() as? UNMutableNotificationContent else { handler(request.content); return }
         lock.lock()
         pendingHandler = handler

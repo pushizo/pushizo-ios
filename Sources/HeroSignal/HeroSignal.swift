@@ -704,6 +704,27 @@ public enum HeroSignal {
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
             clearBadge()
         }
+
+        /// İstek kimliği (`apns-id`/`apns-collapse-id`) veya HeroSignal teslimat kimliği eşleşen bildirimi kaldırır.
+        public static func removeNotification(id: String) {
+            removeDelivered { HSNotificationTray.identifiers(matching: id, in: $0) }
+        }
+
+        /// `aps.thread-id` değeri `group` olan HeroSignal bildirimlerini kaldırır.
+        public static func removeGroupedNotifications(group: String) {
+            removeDelivered { HSNotificationTray.identifiers(inGroup: group, in: $0) }
+        }
+
+        private static func removeDelivered(_ select: @escaping ([HSNotificationTray.Entry]) -> [String]) {
+            let center = UNUserNotificationCenter.current()
+            center.getDeliveredNotifications { delivered in
+                let entries = delivered.map {
+                    HSNotificationTray.Entry(identifier: $0.request.identifier, threadIdentifier: $0.request.content.threadIdentifier, userInfo: $0.request.content.userInfo)
+                }
+                let identifiers = select(entries)
+                if !identifiers.isEmpty { center.removeDeliveredNotifications(withIdentifiers: identifiers) }
+            }
+        }
     }
 
     public enum Session {

@@ -23,6 +23,13 @@ public final class HSStorage {
     public var optedIn: Bool { get { defaults.object(forKey: key("opted_in")) as? Bool ?? true } set { defaults.set(newValue, forKey: key("opted_in")) } }
     public var consentGiven: Bool { get { defaults.bool(forKey: key("consent")) } set { defaults.set(newValue, forKey: key("consent")) } }
     public var tags: [String: String] { get { defaults.dictionary(forKey: key("tags")) as? [String: String] ?? [:] } set { defaults.set(newValue, forKey: key("tags")) } }
+    /// Herhangi bir in-app mesajın bu cihazdaki son gösterimi; app geneli aralık için (ADR-0019 §7).
+    public var lastInAppImpressionAt: Date? {
+        get { (defaults.object(forKey: key("in_app_last_impression_at")) as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) } }
+        set { defaults.set(newValue.map { NSNumber(value: $0.timeIntervalSince1970) }, forKey: key("in_app_last_impression_at")) }
+    }
+    /// Config'den gelen `in_app.min_interval_seconds`; config alınamazsa son bilinen değer kullanılır.
+    public var inAppMinIntervalSeconds: Int { get { defaults.integer(forKey: key("in_app_min_interval_seconds")) } set { defaults.set(newValue, forKey: key("in_app_min_interval_seconds")) } }
     /// NSE: uygulama kapalıyken gönderilemeyen `received` bildirimleri.
     public var pendingReceived: [String] { get { defaults.stringArray(forKey: key("pending_received")) ?? [] } set { defaults.set(newValue, forKey: key("pending_received")) } }
 

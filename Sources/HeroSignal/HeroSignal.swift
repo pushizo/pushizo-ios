@@ -139,6 +139,8 @@ public enum HeroSignal {
         storage = store
         api = HSApi(apiUrl: opts.apiUrl, appId: appId, sdkVersion: sdkVersion)
         queue = HSQueue(defaults: store.defaults, appId: appId)
+        // Config gelene kadar son bilinen app geneli in-app aralığı uygulanır.
+        inApp.globalMinIntervalSeconds = store.inAppMinIntervalSeconds
         badgeStore = HSBadgeStore(appGroup: HSAppGroup.resolve(opts.appGroup))
         errorReporter = HSErrorReporter(platform: "ios", sdkVersion: sdkVersion)
         UNUserNotificationCenter.current().delegate = delegate
@@ -167,9 +169,7 @@ public enum HeroSignal {
     static func start() {
         Task {
             do {
-                if let config = try await api?.request("GET", "/config") {
-                    identityVerificationRequired = config["identity_verification_required"] as? Bool ?? false
-                }
+                if let config = try await api?.request("GET", "/config") { await applyConfig(config) }
             } catch {
                 HSLog.log(.warn, "config alınamadı: \(error)")
                 reportError("config_failed", "app yapılandırması alınamadı", error: error)
@@ -183,6 +183,14 @@ public enum HeroSignal {
             await flushPendingReceived()
             await flushQueue()
         }
+    }
+
+    /// `/config` yanıtı: kimlik doğrulama zorunluluğu ve app geneli in-app aralığı (kalıcı; ADR-0019 §7).
+    static func applyConfig(_ config: [String: Any]) async {
+        identityVerificationRequired = config["identity_verification_required"] as? Bool ?? false
+        let interval = max(((config["in_app"] as? [String: Any])?["min_interval_seconds"] as? NSNumber)?.intValue ?? 0, 0)
+        storage?.inAppMinIntervalSeconds = interval
+        await MainActor.run { inApp.globalMinIntervalSeconds = interval }
     }
 
     /// Kuyruğu işler; kalıcı olarak reddedilen işlemler hata raporuna eklenir.
@@ -451,6 +459,7 @@ public enum HeroSignal {
             guard let subId = engagementSubscriptionId(), let messageId = op["message_id"] as? String else { return }
             var body: [String: Any] = ["subscription_id": subId, "type": op["event"] as? String ?? ""]
             if let button = op["button_id"] as? String, !button.isEmpty { body["button_id"] = button }
+            if let variant = op["variant_id"] as? String, !variant.isEmpty { body["variant_id"] = variant }
             let path = messageId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? messageId
             try await api.request("POST", "/in-app/\(path)/events", body: body)
         case "received":
@@ -490,8 +499,10 @@ public enum HeroSignal {
             checkPermissionChange()
         })
         observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+            inApp.onSessionEnd()
             guard let started = sessionStartedAt else { return }
             sessionStartedAt = nil
+            // Oturum süresi (`usage_seconds`, ADR-0019 §8) arka plana geçişte `POST /sessions { duration_seconds }` ile gider.
             enqueue(["type": "session_end", "duration_seconds": Int(Date().timeIntervalSince(started)), "at": Date().timeIntervalSince1970])
         })
     }
@@ -668,6 +679,59 @@ public enum HeroSignal {
 
         public static var externalId: String? { storage?.externalId }
         public static var id: String? { storage?.userId }
+
+        // MARK: Tercihler (ADR-0019 §4): abonelik sahiplik kanıtıyla `GET/PUT /preferences`
+
+        /// Kanıt: etkileşim aboneliği + kayıtlı token'ın (veya kanonik adresin) özeti; kimlikli kullanıcıda identity_hash.
+        private static func preferenceProof() throws -> (api: HSApi, subscriptionId: String, tokenHash: String?, identityHash: String?) {
+            guard let store = storage, let api else { throw HSError.notInitialized }
+            guard let subId = engagementSubscriptionId() else { throw HSError.noSubscription }
+            let identityHash = store.externalId != nil ? store.userIdentityHash : nil
+            return (api, subId, ownershipToken(store, subscriptionId: subId).map(HSOwnership.tokenHash), identityHash)
+        }
+
+        /// Kullanıcının kategori/kanal tercihleri ve app kategorileri. Abonelik yoksa `HSError.noSubscription`.
+        public static func getPreferences() async throws -> HSPreferencesResult {
+            let (api, subId, tokenHash, identityHash) = try preferenceProof()
+            let enc: (String) -> String = { $0.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? $0 }
+            var query = ["subscription_id=\(enc(subId))"]
+            if let tokenHash { query.append("token_hash=\(tokenHash)") }
+            if let identityHash { query.append("identity_hash=\(enc(identityHash))") }
+            return HSPreferencesParser.parseResult(try await api.request("GET", "/preferences?" + query.joined(separator: "&")))
+        }
+
+        /// Tercihleri yazar (1-100 kayıt; `channel` nil = tüm kanallar); güncel listeyi döndürür.
+        @discardableResult
+        public static func setPreferences(_ preferences: [HSPreferenceInput]) async throws -> HSPreferencesResult {
+            guard HSPreferencesParser.isValid(preferences) else {
+                throw HSError.invalidArgument("1-100 tercih; kategori 1-64 karakter; kanal ios_push|android_push|web_push|email|sms")
+            }
+            let (api, subId, tokenHash, identityHash) = try preferenceProof()
+            var body: [String: Any] = ["subscription_id": subId, "preferences": preferences.map(\.json)]
+            if let tokenHash { body["token_hash"] = tokenHash }
+            if let identityHash { body["identity_hash"] = identityHash }
+            return HSPreferencesParser.parseResult(try await api.request("PUT", "/preferences", body: body))
+        }
+
+        /// Geri çağrı sürümleri (ObjC/köprüler); sonuç ana iş parçacığında döner.
+        public static func getPreferences(_ completion: @escaping (Result<HSPreferencesResult, Error>) -> Void) {
+            Task {
+                let result: Result<HSPreferencesResult, Error>
+                do { result = .success(try await getPreferences()) } catch { result = .failure(error) }
+                await MainActor.run { completion(result) }
+            }
+        }
+
+        public static func setPreferences(_ preferences: [HSPreferenceInput], _ completion: ((Result<HSPreferencesResult, Error>) -> Void)? = nil) {
+            Task {
+                let result: Result<HSPreferencesResult, Error>
+                do { result = .success(try await setPreferences(preferences)) } catch {
+                    HSLog.log(.warn, "tercihler kaydedilemedi: \(error)")
+                    result = .failure(error)
+                }
+                await MainActor.run { completion?(result) }
+            }
+        }
 
         public enum pushSubscription {
             public static var id: String? { storage?.subscriptionId }

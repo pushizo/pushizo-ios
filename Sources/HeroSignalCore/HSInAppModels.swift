@@ -16,6 +16,8 @@ public enum HSInAppTrigger: Equatable {
     case screen(String)
     /// `InAppMessages.addTrigger(key, value)` değerleri; `op`: eq | neq | exists | gt | lt.
     case condition(key: String, op: String, value: HSTriggerValue?)
+    /// Geçerli ön plan oturumu en az `seconds` saniye sürdüğünde (ADR-0019 §7); SDK süre dolunca yeniden değerlendirir.
+    case sessionDuration(Int)
     /// Bu SDK sürümünün tanımadığı tetik türü: mesaj gösterilmez.
     case unsupported(String)
 }
@@ -29,6 +31,10 @@ public enum HSInAppAction: Equatable {
     case deeplink(String)
     /// Kullanıcıya etiket yazar (`User.addTags`).
     case tags([String: String])
+    /// Yerel bildirim izni istemini açar (`UNUserNotificationCenter.requestAuthorization`), ardından mesaj kapanır.
+    case pushPrompt
+    /// `Session.sendEvent(name, value:)` ile outcome olayı gönderir (dönüşüm atribüsyonu), ardından mesaj kapanır.
+    case outcome(name: String, value: Double?)
 }
 
 public struct HSInAppButton: Equatable {
@@ -67,11 +73,15 @@ public struct HSInAppDisplay: Equatable {
     }
 }
 
-/// Sunucunun cihaz için döndürdüğü gösterilebilir in-app mesaj.
+/// Sunucunun cihaz için döndürdüğü gösterilebilir in-app mesaj. `triggerGroups` VEYA ile bağlı gruplardır (grup içi VE);
+/// `triggers` ilk gruptur (geriye uyum).
 public struct HSInAppMessage: Equatable {
     public let id: String
     public let priority: Int
     public let triggers: [HSInAppTrigger]
+    public let triggerGroups: [[HSInAppTrigger]]
+    /// Sunucunun seçtiği A/B görünüm varyantı; olay bildirimlerinde geri gönderilir.
+    public let variantId: String?
     public let display: HSInAppDisplay
     public let remainingImpressions: Int
     public let minIntervalSeconds: Int
@@ -98,10 +108,13 @@ public enum HSInAppParser {
 
     public static func parseMessage(_ item: [String: Any]) -> HSInAppMessage? {
         guard let id = item["id"] as? String, let display = item["display"] as? [String: Any] else { return nil }
+        let groups = parseTriggerGroups(item["trigger_groups"] as? [[[String: Any]]], triggers: item["triggers"] as? [[String: Any]] ?? [])
         return HSInAppMessage(
             id: id,
             priority: (item["priority"] as? NSNumber)?.intValue ?? 0,
-            triggers: parseTriggers(item["triggers"] as? [[String: Any]] ?? []),
+            triggers: groups[0],
+            triggerGroups: groups,
+            variantId: nonEmpty(item["variant_id"]),
             display: HSInAppDisplay(
                 layout: HSInAppLayout(rawValue: display["layout"] as? String ?? "") ?? .modal,
                 backgroundColor: nonEmpty(display["background_color"]),
@@ -119,11 +132,20 @@ public enum HSInAppParser {
         )
     }
 
+    /// `trigger_groups` (VEYA grupları) yoksa veya boşsa `triggers` tek grup olur; sonuç her zaman en az bir grup içerir.
+    public static func parseTriggerGroups(_ groups: [[[String: Any]]]?, triggers: [[String: Any]]) -> [[HSInAppTrigger]] {
+        let parsed = (groups ?? []).map(parseTriggers)
+        return parsed.isEmpty ? [parseTriggers(triggers)] : parsed
+    }
+
     public static func parseTriggers(_ items: [[String: Any]]) -> [HSInAppTrigger] {
         items.map { t in
             let kind = t["kind"] as? String ?? ""
             switch kind {
             case "session_start": return .sessionStart
+            case "session_duration":
+                guard let seconds = (t["seconds"] as? NSNumber)?.intValue else { return .unsupported(kind) }
+                return .sessionDuration(seconds)
             case "event": return (t["name"] as? String).map(HSInAppTrigger.event) ?? .unsupported(kind)
             case "screen": return (t["name"] as? String).map(HSInAppTrigger.screen) ?? .unsupported(kind)
             case "trigger":
@@ -168,6 +190,13 @@ public enum HSInAppParser {
         case "tags":
             let tags = (a["tags"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
             return .tags(tags)
+        case "push_prompt":
+            return .pushPrompt
+        case "outcome":
+            // Adsız outcome düğmesi geçersizdir (atlanır); değer sayı değilse nil.
+            guard let name = nonEmpty(a["name"]) else { return nil }
+            let value = (a["value"] as? NSNumber).flatMap { CFGetTypeID($0) != CFBooleanGetTypeID() && $0.doubleValue.isFinite ? $0.doubleValue : nil }
+            return .outcome(name: name, value: value)
         default:
             return .dismiss
         }

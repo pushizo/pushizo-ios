@@ -90,7 +90,8 @@ public final class HSInAppHandle {
 
 /**
  In-app akışı: listeyi oturum başında ve en fazla 5 dakikada bir yeniler, tetikleri değerlendirir (`HSInAppRules`),
- aynı anda tek mesaj gösterir, gösterim/tıklama/kapatma olaylarını çevrimdışı kuyruğa yazar ve aksiyonları uygular.
+ `session_duration` eşikleri için zamanlayıcı kurar, app geneli gösterim aralığını uygular, aynı anda tek mesaj gösterir,
+ gösterim/tıklama/kapatma olaylarını (varyant kimliğiyle) çevrimdışı kuyruğa yazar ve aksiyonları uygular.
  Durum ana iş parçacığında tutulur.
  */
 final class HSInAppController {
@@ -106,11 +107,16 @@ final class HSInAppController {
     private var screen: String?
     private(set) var triggers: [String: String] = [:]
     private var sessionStartAt: Date?
+    /// Ön plan oturumunun başlangıcı (`session_duration` için); arka planda nil.
+    private var sessionBeganAt: Date?
+    private var sessionDurationTimer: DispatchWorkItem?
     private var current: HSInAppHandle?
     private lazy var defaultRenderer = HSInAppWindowRenderer()
     private var customRenderer: HSInAppRenderer?
 
     var paused = false
+    /// `in_app.min_interval_seconds` (config): herhangi bir gösterimden sonra bu süre dolmadan yeni mesaj gösterilmez.
+    var globalMinIntervalSeconds = 0
     var clickListeners: [(HSInAppClickEvent) -> Void] = []
     var lifecycleListeners: [WeakListener] = []
 
@@ -169,8 +175,39 @@ final class HSInAppController {
     func onSessionStart() {
         main { [self] in
             sessionStartAt = Date()
+            sessionBeganAt = sessionStartAt
             refresh(minAge: Self.sessionRefreshMinAge)
+            scheduleSessionDurationTimer()
         }
+    }
+
+    /// Uygulama arka plana geçti: oturum süresi sıfırlanır, `session_duration` zamanlayıcısı iptal edilir.
+    func onSessionEnd() {
+        main { [self] in
+            sessionStartAt = nil
+            sessionBeganAt = nil
+            sessionDurationTimer?.cancel()
+            sessionDurationTimer = nil
+        }
+    }
+
+    /// Geçerli ön plan oturumunun süresi (saniye); arka planda 0.
+    private var sessionSeconds: Int { sessionBeganAt.map { Int(Date().timeIntervalSince($0)) } ?? 0 }
+
+    /// Mesajlardaki bir sonraki `session_duration` eşiği için zamanlayıcı kurar (yoksa iptal).
+    private func scheduleSessionDurationTimer() {
+        sessionDurationTimer?.cancel()
+        sessionDurationTimer = nil
+        guard let began = sessionBeganAt,
+              let next = HSInAppRules.nextSessionDurationSeconds(messages, sessionSeconds: sessionSeconds) else { return }
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.evaluate(.sessionDuration)
+            self.scheduleSessionDurationTimer()
+        }
+        sessionDurationTimer = item
+        let delay = max(began.addingTimeInterval(Double(next)).timeIntervalSinceNow, 0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     /// Abonelik ilk kez oluştuğunda veya kullanıcı değiştiğinde (login/logout) liste hemen yenilenir.
@@ -211,6 +248,7 @@ final class HSInAppController {
                     // Sunucu gönderilmiş olayları içerir; yalnızca kuyrukta olayı bekleyen mesajların yerel durumu korunur.
                     self.locals = self.locals.filter { pending.contains($0.key) }
                     HSLog.log(.debug, "in-app listesi yenilendi: \(list.count) mesaj")
+                    self.scheduleSessionDurationTimer()
                 }
                 self.runPendingSessionStart()
             }
@@ -227,8 +265,10 @@ final class HSInAppController {
     private func evaluate(_ cause: HSInAppCause) {
         if fetchedAt.map({ Date().timeIntervalSince($0) > Self.refreshInterval }) ?? true { refresh(minAge: Self.refreshInterval) }
         guard !paused, current == nil else { return }
-        guard let message = HSInAppRules.select(messages, cause: cause, state: HSInAppState(screen: screen, triggers: triggers),
-                                                locals: locals, now: Date()) else { return }
+        let state = HSInAppState(screen: screen, triggers: triggers, sessionSeconds: sessionSeconds)
+        guard let message = HSInAppRules.select(messages, cause: cause, state: state, locals: locals, now: Date(),
+                                                globalMinIntervalSeconds: globalMinIntervalSeconds,
+                                                lastImpressionAt: HeroSignal.storage?.lastInAppImpressionAt) else { return }
         present(message)
     }
 
@@ -247,10 +287,13 @@ final class HSInAppController {
     func onDisplayed(_ handle: HSInAppHandle) {
         let id = handle.message.id
         var local = locals[id] ?? HSLocalImpressions()
+        let now = Date()
         local.count += 1
-        local.lastAt = Date()
+        local.lastAt = now
         locals[id] = local
-        record(id, type: "impression", buttonId: nil)
+        // App geneli aralık herhangi bir mesajın son gösteriminden ölçülür; uygulama yeniden başlasa da korunur.
+        HeroSignal.storage?.lastInAppImpressionAt = now
+        record(handle.message, type: "impression", buttonId: nil)
         notifyLifecycle { $0.onDidDisplay(handle.message) }
     }
 
@@ -264,7 +307,7 @@ final class HSInAppController {
     func onButtonClicked(_ handle: HSInAppHandle, button: HSInAppButton) {
         let message = handle.message
         markInteracted(message.id)
-        record(message.id, type: "click", buttonId: button.id)
+        record(message, type: "click", buttonId: button.id)
         var url: String?
         if case let .url(u) = button.action { url = u }
         if case let .deeplink(u) = button.action { url = u }
@@ -278,6 +321,10 @@ final class HSInAppController {
             }
         case let .tags(tags):
             if !tags.isEmpty { HeroSignal.User.addTags(tags) }
+        case let .outcome(name, value):
+            HeroSignal.Session.sendEvent(name, value: value)
+        case .pushPrompt:
+            HeroSignal.Notifications.requestPermission()
         case .dismiss:
             break
         }
@@ -286,7 +333,7 @@ final class HSInAppController {
 
     func onDismissed(_ handle: HSInAppHandle) {
         markInteracted(handle.message.id)
-        record(handle.message.id, type: "dismiss", buttonId: nil)
+        record(handle.message, type: "dismiss", buttonId: nil)
         close(handle)
     }
 
@@ -299,11 +346,15 @@ final class HSInAppController {
     func onClosed(_ handle: HSInAppHandle) {
         if current === handle { current = nil }
         notifyLifecycle { $0.onDidDismiss(handle.message) }
+        // Mesaj açıkken eşiği dolan `session_duration` tetikleri (zamanlayıcı o anda atlandı) yeniden değerlendirilir.
+        evaluate(.sessionDuration)
     }
 
-    private func record(_ messageId: String, type: String, buttonId: String?) {
-        var op: [String: Any] = ["type": "in_app_event", "message_id": messageId, "event": type, "at": Date().timeIntervalSince1970]
+    private func record(_ message: HSInAppMessage, type: String, buttonId: String?) {
+        var op: [String: Any] = ["type": "in_app_event", "message_id": message.id, "event": type, "at": Date().timeIntervalSince1970]
         if let buttonId { op["button_id"] = buttonId }
+        // Sunucunun seçtiği A/B varyantı olayla birlikte geri gönderilir.
+        if let variantId = message.variantId { op["variant_id"] = variantId }
         HeroSignal.enqueue(op)
     }
 }

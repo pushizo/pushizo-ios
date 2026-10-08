@@ -143,6 +143,91 @@ final class HSInAppParserTests: XCTestCase {
         XCTAssertEqual(list[1].endAt, HSIsoTime.parse("2026-12-31T20:59:59Z"))
     }
 
+    func testParsesTriggerGroupsVariantAndNewActions() throws {
+        let json = """
+        {"id":"iam_g","priority":3,"variant_id":"var_b",
+         "triggers":[{"kind":"event","name":"cart_viewed"}],
+         "trigger_groups":[
+           [{"kind":"event","name":"cart_viewed"},{"kind":"trigger","key":"cart_total","op":"gt","value":100}],
+           [{"kind":"session_duration","seconds":30}]],
+         "display":{"layout":"modal","dismissible":true,"blocks":[
+           {"type":"button","id":"allow","text":"İzin ver","action":{"type":"push_prompt"}},
+           {"type":"button","id":"buy","text":"Satın al","action":{"type":"outcome","name":"purchase","value":49.9}},
+           {"type":"button","id":"later","text":"Sonra","action":{"type":"outcome","name":"remind_later"}},
+           {"type":"button","id":"noname","text":"Bozuk","action":{"type":"outcome"}}]},
+         "remaining_impressions":1,"min_interval_seconds":0,"last_impression_at":null,"end_at":null}
+        """
+        let m = HSInAppParser.parseMessage(try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any])!
+        XCTAssertEqual(m.variantId, "var_b")
+        XCTAssertEqual(m.triggerGroups.count, 2)
+        XCTAssertEqual(m.triggerGroups[0], m.triggers) // geriye uyum: ilk grup
+        XCTAssertEqual(m.triggerGroups[1], [.sessionDuration(30)])
+        XCTAssertEqual(m.display.buttons.map(\.id), ["allow", "buy", "later"]) // adsız outcome düğmesi atlanır
+        XCTAssertEqual(m.display.buttons[0].action, .pushPrompt)
+        XCTAssertEqual(m.display.buttons[1].action, .outcome(name: "purchase", value: 49.9))
+        XCTAssertEqual(m.display.buttons[2].action, .outcome(name: "remind_later", value: nil))
+
+        // trigger_groups yok/boş → triggers tek grup; variant_id yok → nil.
+        let legacy = HSInAppParser.parseMessage([
+            "id": "iam_l", "triggers": [["kind": "screen", "name": "home"]], "trigger_groups": [] as [Any], "variant_id": NSNull(),
+            "display": ["layout": "modal", "blocks": [] as [Any]],
+        ])!
+        XCTAssertEqual(legacy.triggerGroups, [[.screen("home")]])
+        XCTAssertNil(legacy.variantId)
+        XCTAssertEqual(HSInAppParser.parseTriggerGroups(nil, triggers: []), [[]])
+    }
+
+    func testTriggerGroupsAreOrOfAnd() {
+        let groups: [[HSInAppTrigger]] = [
+            [.event("cart_viewed"), .condition(key: "cart_total", op: "gt", value: .number(100))],
+            [.screen("checkout")],
+        ]
+        XCTAssertFalse(HSInAppRules.matchesAny(groups, cause: .event("cart_viewed"), state: HSInAppState(triggers: ["cart_total": "50"])))
+        XCTAssertTrue(HSInAppRules.matchesAny(groups, cause: .event("cart_viewed"), state: HSInAppState(triggers: ["cart_total": "150"])))
+        XCTAssertTrue(HSInAppRules.matchesAny(groups, cause: .screen("checkout"), state: HSInAppState(screen: "checkout")))
+        XCTAssertFalse(HSInAppRules.matchesAny(groups, cause: .screen("home"), state: HSInAppState(screen: "home")))
+        // Boş grup listesi tetiksiz mesaj gibi: yalnızca oturum başı.
+        XCTAssertTrue(HSInAppRules.matchesAny([], cause: .sessionStart, state: HSInAppState()))
+        XCTAssertFalse(HSInAppRules.matchesAny([], cause: .event("x"), state: HSInAppState()))
+    }
+
+    func testSessionDurationFiresOnTimerAndHoldsAfterwards() {
+        let duration: [HSInAppTrigger] = [.sessionDuration(30)]
+        XCTAssertFalse(HSInAppRules.matches(duration, cause: .sessionDuration, state: HSInAppState(sessionSeconds: 29)))
+        XCTAssertTrue(HSInAppRules.matches(duration, cause: .sessionDuration, state: HSInAppState(sessionSeconds: 30)))
+        XCTAssertFalse(HSInAppRules.matches(duration, cause: .sessionStart, state: HSInAppState(sessionSeconds: 0)))
+        // Olayla birlikte: olay ateşler, süre koşulu sağlanmalı.
+        let combined = duration + [.event("cart_viewed")]
+        XCTAssertFalse(HSInAppRules.matches(combined, cause: .event("cart_viewed"), state: HSInAppState(sessionSeconds: 10)))
+        XCTAssertTrue(HSInAppRules.matches(combined, cause: .event("cart_viewed"), state: HSInAppState(sessionSeconds: 45)))
+        XCTAssertFalse(HSInAppRules.matches(combined, cause: .sessionDuration, state: HSInAppState(sessionSeconds: 45))) // olay anı değil
+
+        let a = HSInAppParser.parseMessage(["id": "a", "trigger_groups": [[["kind": "session_duration", "seconds": 60]], [["kind": "session_duration", "seconds": 20]]], "display": ["blocks": [] as [Any]]])!
+        let b = HSInAppParser.parseMessage(["id": "b", "triggers": [["kind": "event", "name": "x"]], "display": ["blocks": [] as [Any]]])!
+        XCTAssertEqual(HSInAppRules.nextSessionDurationSeconds([a, b], sessionSeconds: 0), 20)
+        XCTAssertEqual(HSInAppRules.nextSessionDurationSeconds([a, b], sessionSeconds: 20), 60)
+        XCTAssertNil(HSInAppRules.nextSessionDurationSeconds([a, b], sessionSeconds: 60))
+        XCTAssertNil(HSInAppRules.nextSessionDurationSeconds([b], sessionSeconds: 0))
+    }
+
+    func testGlobalIntervalCoversAllMessages() {
+        let t100 = Date(timeIntervalSince1970: 100)
+        XCTAssertTrue(HSInAppRules.globalIntervalAllows(minIntervalSeconds: 0, lastImpressionAt: t100, now: Date(timeIntervalSince1970: 101)))
+        XCTAssertTrue(HSInAppRules.globalIntervalAllows(minIntervalSeconds: 60, lastImpressionAt: nil, now: t100))
+        XCTAssertFalse(HSInAppRules.globalIntervalAllows(minIntervalSeconds: 60, lastImpressionAt: t100, now: Date(timeIntervalSince1970: 159.9)))
+        XCTAssertTrue(HSInAppRules.globalIntervalAllows(minIntervalSeconds: 60, lastImpressionAt: t100, now: Date(timeIntervalSince1970: 160)))
+        let m = HSInAppParser.parseMessage([
+            "id": "iam_x", "priority": 1, "triggers": [["kind": "event", "name": "e"]],
+            "display": ["layout": "modal", "dismissible": true, "blocks": [] as [Any]], "remaining_impressions": 5,
+        ])!
+        XCTAssertNil(HSInAppRules.select([m], cause: .event("e"), state: HSInAppState(), locals: [:], now: Date(timeIntervalSince1970: 150),
+                                         globalMinIntervalSeconds: 60, lastImpressionAt: t100))
+        XCTAssertEqual(HSInAppRules.select([m], cause: .event("e"), state: HSInAppState(), locals: [:], now: Date(timeIntervalSince1970: 160),
+                                           globalMinIntervalSeconds: 60, lastImpressionAt: t100)?.id, "iam_x")
+        XCTAssertEqual(HSInAppRules.select([m], cause: .event("e"), state: HSInAppState(), locals: [:], now: Date(timeIntervalSince1970: 150),
+                                           globalMinIntervalSeconds: 0, lastImpressionAt: t100)?.id, "iam_x")
+    }
+
     func testIsoTime() {
         XCTAssertEqual(HSIsoTime.parse("1970-01-01T00:00:00Z"), Date(timeIntervalSince1970: 0))
         XCTAssertEqual(HSIsoTime.parse("1970-01-01T00:00:01.5Z"), Date(timeIntervalSince1970: 1.5))

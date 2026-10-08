@@ -6,15 +6,19 @@ public enum HSInAppCause: Equatable {
     case event(String)
     case screen(String)
     case triggerChange(Set<String>)
+    /// Oturum süresi zamanlayıcısı doldu (veya bir mesaj kapandı); `session_duration` tetikleri yeniden değerlendirilir.
+    case sessionDuration
 }
 
-/// Değerlendirme anındaki durum: geçerli ekran ve `addTrigger` değerleri.
+/// Değerlendirme anındaki durum: geçerli ekran, `addTrigger` değerleri ve ön plan oturumunun süresi (saniye).
 public struct HSInAppState: Equatable {
     public var screen: String?
     public var triggers: [String: String]
-    public init(screen: String? = nil, triggers: [String: String] = [:]) {
+    public var sessionSeconds: Int
+    public init(screen: String? = nil, triggers: [String: String] = [:], sessionSeconds: Int = 0) {
         self.screen = screen
         self.triggers = triggers
+        self.sessionSeconds = sessionSeconds
     }
 }
 
@@ -33,16 +37,25 @@ public struct HSLocalImpressions: Equatable {
 /**
  In-app tetik ve sıklık kuralları (Android `HsInAppRules` ile aynı; ortak vektörler `sdk/testdata/messaging-vectors.json`).
 
- - Mesaj yalnızca tetiklerinden birini "ateşleyen" değerlendirmede adaydır: oturum başı → `session_start`, olay → aynı
-   adlı `event`, ekran → yeni ekranla eşleşen `screen`, trigger değişimi → değişen anahtarlı `trigger`. Tetiksiz mesaj
-   oturum başında adaydır.
- - Aday mesajın tüm koşulları sağlanmalıdır: `session_start` oturum boyunca; `event` yalnızca o olay anında; `screen`
-   geçerli ekran; `trigger` karşılaştırması. Tanınmayan tür hiç sağlanmaz.
+ - Mesajın tetik grupları VEYA ile bağlıdır: herhangi bir grup sağlanırsa mesaj adaydır (`matchesAny`). Grup içinde
+   (`matches`) mesaj yalnızca tetiklerinden birini "ateşleyen" değerlendirmede adaydır: oturum başı → `session_start`,
+   olay → aynı adlı `event`, ekran → yeni ekranla eşleşen `screen`, trigger değişimi → değişen anahtarlı `trigger`, süre
+   zamanlayıcısı → süresi dolmuş `session_duration`. Tetiksiz grup oturum başında adaydır.
+ - Aday grubun tüm koşulları sağlanmalıdır: `session_start` oturum boyunca; `event` yalnızca o olay anında; `screen`
+   geçerli ekran; `trigger` karşılaştırması; `session_duration` oturum süresi eşiğe ulaştıysa. Tanınmayan tür hiç sağlanmaz.
+ - App geneli aralık: son gösterimden (herhangi bir mesaj) bu yana `in_app.min_interval_seconds` geçmediyse hiçbir mesaj
+   gösterilmez (`globalIntervalAllows`).
  - Karşılaştırma: iki taraf da düz ondalık sayıysa sayısal, değilse metin (büyük/küçük harf duyarlı). `neq` anahtar
    yoksa sağlanır; `gt`/`lt` sayısal olmayan değerde sağlanmaz.
  */
 public enum HSInAppRules {
     private static let decimal = try! NSRegularExpression(pattern: #"^-?[0-9]+(\.[0-9]+)?$"#)
+
+    /// VEYA grupları: herhangi biri sağlanırsa true. Boş liste tetiksiz mesaj gibi (yalnızca oturum başı) davranır.
+    public static func matchesAny(_ groups: [[HSInAppTrigger]], cause: HSInAppCause, state: HSInAppState) -> Bool {
+        if groups.isEmpty { return matches([], cause: cause, state: state) }
+        return groups.contains { matches($0, cause: cause, state: state) }
+    }
 
     public static func matches(_ triggers: [HSInAppTrigger], cause: HSInAppCause, state: HSInAppState) -> Bool {
         if triggers.isEmpty { return cause == .sessionStart }
@@ -56,6 +69,7 @@ public enum HSInAppRules {
         case let (.event(name), .event(fired)): return name == fired
         case let (.screen(name), .screen(fired)): return name == fired && state.screen == name
         case let (.condition(key, _, _), .triggerChange(keys)): return keys.contains(key)
+        case let (.sessionDuration(seconds), .sessionDuration): return state.sessionSeconds >= seconds
         default: return false
         }
     }
@@ -66,6 +80,7 @@ public enum HSInAppRules {
         case let .event(name): return cause == .event(name)
         case let .screen(name): return state.screen == name
         case let .condition(key, op, value): return conditionHolds(key: key, op: op, value: value, triggers: state.triggers)
+        case let .sessionDuration(seconds): return state.sessionSeconds >= seconds
         case .unsupported: return false
         }
     }
@@ -119,12 +134,29 @@ public enum HSInAppRules {
         return true
     }
 
-    /// Eşleşen ve gösterilebilir mesajlar arasından en yüksek öncelikli (eşitlikte liste sırası).
+    /// App geneli aralık (`in_app.min_interval_seconds`): son gösterimden bu yana yeterli süre geçtiyse true.
+    public static func globalIntervalAllows(minIntervalSeconds: Int, lastImpressionAt: Date?, now: Date) -> Bool {
+        guard minIntervalSeconds > 0, let last = lastImpressionAt else { return true }
+        return now.timeIntervalSince(last) >= Double(minIntervalSeconds)
+    }
+
+    /// Mesajlardaki `session_duration` eşikleri arasından geçerli oturum süresini aşan en küçüğü (saniye); yoksa nil.
+    /// Zamanlayıcı bu eşikte `.sessionDuration` nedeniyle yeniden değerlendirme yapar.
+    public static func nextSessionDurationSeconds(_ messages: [HSInAppMessage], sessionSeconds: Int) -> Int? {
+        messages.flatMap { $0.triggerGroups.flatMap { $0 } }
+            .compactMap { if case let .sessionDuration(s) = $0, s > sessionSeconds { return s } else { return nil } }
+            .min()
+    }
+
+    /// Eşleşen ve gösterilebilir mesajlar arasından en yüksek öncelikli (eşitlikte liste sırası). App geneli aralık
+    /// (`globalMinIntervalSeconds`, `lastImpressionAt`: herhangi bir mesajın son gösterimi) dolmadıysa nil.
     public static func select(_ messages: [HSInAppMessage], cause: HSInAppCause, state: HSInAppState,
-                              locals: [String: HSLocalImpressions], now: Date) -> HSInAppMessage? {
+                              locals: [String: HSLocalImpressions], now: Date,
+                              globalMinIntervalSeconds: Int = 0, lastImpressionAt: Date? = nil) -> HSInAppMessage? {
+        guard globalIntervalAllows(minIntervalSeconds: globalMinIntervalSeconds, lastImpressionAt: lastImpressionAt, now: now) else { return nil }
         var best: HSInAppMessage?
         for m in messages {
-            guard matches(m.triggers, cause: cause, state: state),
+            guard matchesAny(m.triggerGroups, cause: cause, state: state),
                   canDisplay(m, local: locals[m.id] ?? HSLocalImpressions(), now: now) else { continue }
             if best == nil || m.priority > best!.priority { best = m }
         }

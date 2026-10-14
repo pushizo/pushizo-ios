@@ -21,19 +21,28 @@ import UserNotifications
  ```
  App Group verilmezse Info.plist `HeroSignalAppGroup` anahtarı, o da yoksa `group.<uygulama bundle id>.herosignal` kullanılır
  (rozet sayacının uygulama ile paylaşılması için App Group yetkisi her iki hedefte de açık olmalıdır).
+
+ Gizlilik onayı: uygulama `requiresPrivacyConsent` ve onay durumunu `appGroup` ile paylaşılan depolamaya yazar; NSE
+ `received` göndermeden önce bunu okur. Onay yoksa ağ çağrısı yapılmaz, kayıt `pendingReceived` listesinde kalır ve
+ onay verilince uygulama gönderir. App Group paylaşılmıyorsa `requiresPrivacyConsent: true` verin (NSE onayı göremediği
+ için gönderim yapmaz).
  */
 public final class HeroSignalNotificationServiceExtension {
+    /// `received` isteği için en uzun bekleme (saniye); dolarsa kayıt `pendingReceived` listesinde kalır, uygulama gönderir.
+    public static let receivedTimeout: TimeInterval = 5
     private let api: HSApi
     private let storage: HSStorage
     private let badges: HSBadgeStore
+    private let requiresPrivacyConsent: Bool
     private let lock = NSLock()
     private var pendingHandler: ((UNNotificationContent) -> Void)?
     private var content: UNMutableNotificationContent?
 
-    public init(appId: String, apiUrl: String, appGroup: String? = nil) {
+    public init(appId: String, apiUrl: String, appGroup: String? = nil, requiresPrivacyConsent: Bool = false) {
         self.api = HSApi(apiUrl: apiUrl, appId: appId, sdkVersion: "0.1.0")
         self.storage = HSStorage(appId: appId, appGroup: appGroup)
         self.badges = HSBadgeStore(appGroup: HSAppGroup.resolve(appGroup))
+        self.requiresPrivacyConsent = requiresPrivacyConsent
     }
 
     public func didReceive(_ request: UNNotificationRequest, withContentHandler handler: @escaping (UNNotificationContent) -> Void) {
@@ -46,27 +55,55 @@ public final class HeroSignalNotificationServiceExtension {
         lock.unlock()
         guard let n = HSNotification(userInfo: request.content.userInfo) else { finish(); return }
 
-        if let id = n.deliveryId {
-            let api = self.api
-            let storage = self.storage
-            Task {
-                do { try await api.request("POST", "/deliveries/\(id)/received", body: [:]) }
-                catch { storage.pendingReceived = Array((storage.pendingReceived + [id]).suffix(100)) }
-            }
-        }
+        // `received` önce kalıcı listeye yazılır: NSE süreci yanıt gelmeden sonlansa da kayıt kaybolmaz, uygulama gönderir.
+        let deliveryId = n.deliveryId
+        if let deliveryId { storage.addPendingReceived(deliveryId) }
+        let sendReceived = deliveryId != nil && HSConsent.allowsNetwork(storage: storage, required: requiresPrivacyConsent)
 
         // Rozet: Increase → paylaşılan sayaç + artış; SetTo → sayaç sunucu değerine eşitlenir.
         if let badge = badges.apply(n) { mutable.badge = NSNumber(value: badge) }
 
         Task { [weak self] in
             guard let self else { return }
-            await self.registerCategory(for: n, content: mutable)
-            await self.attachImage(for: n, content: mutable)
+            // `received` (süre sınırıyla) ve içerik hazırlığı paralel yürür; içerik ikisi de bitince teslim edilir.
+            await withTaskGroup(of: Void.self) { group in
+                if sendReceived, let deliveryId {
+                    group.addTask { await self.confirmReceived(deliveryId) }
+                }
+                group.addTask {
+                    await self.registerCategory(for: n, content: mutable)
+                    await self.attachImage(for: n, content: mutable)
+                }
+            }
             self.finish()
         }
     }
 
     public func serviceExtensionTimeWillExpire() { finish() }
+
+    /// `received` gönderir; başarıda kayıt bekleyen listeden çıkarılır. Süre dolarsa istek iptal edilir, kayıt listede kalır.
+    private func confirmReceived(_ deliveryId: String) async {
+        let api = self.api
+        let storage = self.storage
+        await Self.withTimeout(Self.receivedTimeout) {
+            do {
+                try await api.request("POST", "/deliveries/\(deliveryId)/received", body: [:])
+                storage.removePendingReceived(deliveryId)
+            } catch {
+                // Gönderilemedi: kayıt `pendingReceived` listesinde kalır, uygulama açılınca kuyruktan gönderilir.
+            }
+        }
+    }
+
+    /// İşlemi en fazla `seconds` saniye bekler; süre dolunca iptal eder (URLSession istekleri iptale hemen yanıt verir).
+    private static func withTimeout(_ seconds: TimeInterval, _ operation: @escaping () async -> Void) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await operation() }
+            group.addTask { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+            _ = await group.next()
+            group.cancelAll()
+        }
+    }
 
     /// Düğmeli bildirimde dinamik kategori; düğmesizde kapatma geri bildirimi için varsayılan kategori.
     private func registerCategory(for n: HSNotification, content: UNMutableNotificationContent) async {

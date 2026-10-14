@@ -31,6 +31,22 @@ public enum HSOwnership {
         return withProof(body, registeredToken: registeredToken)
     }
 
+    /**
+     `POST /events` öğeleri: her olaya abonelik kimliği ve sahiplik kanıtı eklenir (ADR-0016 Karar 8) — `token_hash`
+     kayıtlı token'ın (e-posta/SMS'te kanonik adresin) özeti, `identity_hash` kimlikli kullanıcının hash'i. Değer yoksa
+     alan gönderilmez.
+     */
+    public static func eventItems(_ ops: [[String: Any]], subscriptionId: String, registeredToken: String?, identityHash: String?) -> [[String: Any]] {
+        let proofHash = registeredToken.map { HSOwnership.tokenHash($0) }
+        return ops.map { e in
+            var event: [String: Any] = ["name": e["name"] ?? "", "properties": e["properties"] ?? [String: Any](), "occurred_at": e["occurred_at"] ?? "", "subscription_id": subscriptionId]
+            if let value = e["value"] { event["value"] = value }
+            if let proofHash { event["token_hash"] = proofHash }
+            if let identityHash { event["identity_hash"] = identityHash }
+            return event
+        }
+    }
+
     /// `DELETE` için sorgu dizesi (`?token_hash=…&identity_hash=…`); kanıt yoksa boş.
     public static func query(registeredToken: String?, identityHash: String? = nil) -> String {
         var params: [String] = []
@@ -39,6 +55,56 @@ public enum HSOwnership {
             params.append("identity_hash=\(encoded)")
         }
         return params.isEmpty ? "" : "?" + params.joined(separator: "&")
+    }
+
+    /**
+     In-app ve inbox `GET`/`DELETE` sorgusu (başında `?` yok): `subscription_id`, kayıtlı token'ın (e-posta/SMS'te
+     kanonik adresin) özeti `token_hash` ve varsa `identity_hash`. Kanıtla kaydolan abonelikler ve e-posta/SMS
+     abonelikleri için sunucu kanıtsız isteği reddeder (ADR-0016).
+     */
+    public static func subscriptionQuery(subscriptionId: String, registeredToken: String?, identityHash: String? = nil) -> String {
+        var params = ["subscription_id=\(encodeQueryValue(subscriptionId))"]
+        if let registeredToken { params.append("token_hash=\(tokenHash(registeredToken))") }
+        if let identityHash { params.append("identity_hash=\(encodeQueryValue(identityHash))") }
+        return params.joined(separator: "&")
+    }
+
+    /// In-app olayı ve inbox `read`/`read-all` gövdesi: `subscription_id` + sahiplik kanıtı (değer yoksa alan eklenmez).
+    public static func subscriptionBody(_ body: [String: Any] = [:], subscriptionId: String, registeredToken: String?, identityHash: String? = nil) -> [String: Any] {
+        var out = withProof(body, registeredToken: registeredToken, identityHash: identityHash)
+        out["subscription_id"] = subscriptionId
+        return out
+    }
+
+    /// Sorgu değeri için güvenli karakterler (`&`, `=`, `+`, `?`, `#` kodlanır).
+    private static let queryValueAllowed: CharacterSet = {
+        var set = CharacterSet.urlQueryAllowed
+        set.remove(charactersIn: "&=+?#")
+        return set
+    }()
+
+    private static func encodeQueryValue(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: queryValueAllowed) ?? value
+    }
+}
+
+/// Kayıt ve izin PATCH'lerindeki `device` nesnesi.
+public enum HSDeviceInfo {
+    /// Bilinmeyen değerler (ör. `app_version`) JSON null yerine hiç gönderilmez.
+    public static func make(model: String, osVersion: String, appVersion: String?, sdkVersion: String, locale: String, timezone: String, pushCapable: Bool, pushEnvironment: String) -> [String: Any] {
+        var info: [String: Any] = [
+            "model": model,
+            "os": "iOS",
+            "os_version": osVersion,
+            "sdk_version": sdkVersion,
+            "sdk_platform": "ios",
+            "locale": locale,
+            "timezone": timezone,
+            "push_capable": pushCapable,
+            "push_environment": pushEnvironment,
+        ]
+        if let appVersion, !appVersion.isEmpty { info["app_version"] = appVersion }
+        return info
     }
 }
 

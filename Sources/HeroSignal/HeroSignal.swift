@@ -77,6 +77,12 @@ public struct HSOptions {
     public var appGroup: String?
     /// Provisional (sessiz) izin ile başla.
     public var provisionalAuthorization = false
+    /**
+     true (varsayılan): SDK `UNUserNotificationCenter.current().delegate` olarak kendi delegesini atar; önceki delege zayıf
+     referansla tutulur ve HeroSignal dışı bildirimler ona iletilir. false: delegeyi uygulama yönetir ve
+     `HeroSignal.Notifications.handleWillPresent` / `handleDidReceive` çağrılarını kendi delegesinden yapar.
+     */
+    public var installsNotificationDelegate = true
     public var logLevel: HSLog.Level = .warn
     public init() {}
 }
@@ -115,11 +121,15 @@ public enum HeroSignal {
     static var errorReporter: HSErrorReporter?
     static var errorFlushScheduled = false
     static var identityVerificationRequired = false
-    static var sessionStartedAt: Date?
+    static var sessionTracker: HSSessionTracker?
+    /// Arka planda oturum penceresi (30 sn) dolunca oturumu kapatan zamanlayıcı; ön plana dönüşte iptal edilir.
+    static var sessionExpiryWork: DispatchWorkItem?
     static let clickListeners = HSListenerRegistry<HSClickEvent>()
     static let foregroundListeners = HSListenerRegistry<HSForegroundEvent>()
     static let permissionTracker = HSPermissionTracker()
-    static var subscriptionObservers: [(HSPushSubscriptionState) -> Void] = []
+    static let subscriptionObservers = HSListenerRegistry<HSPushSubscriptionState>()
+    private static let authorizationLock = NSLock()
+    private static var cachedAuthorizationStatus: UNAuthorizationStatus?
     static var pendingClick: HSClickEvent?
     static let delegate = HSNotificationDelegate()
     static let inApp = HSInAppController()
@@ -139,11 +149,14 @@ public enum HeroSignal {
         storage = store
         api = HSApi(apiUrl: opts.apiUrl, appId: appId, sdkVersion: sdkVersion)
         queue = HSQueue(defaults: store.defaults, appId: appId)
+        sessionTracker = HSSessionTracker(defaults: store.defaults, appId: appId)
+        // NSE `received` göndermeden önce onay zorunluluğunu paylaşılan depodan okur.
+        store.privacyConsentRequired = opts.requiresPrivacyConsent
         // Config gelene kadar son bilinen app geneli in-app aralığı uygulanır.
         inApp.globalMinIntervalSeconds = store.inAppMinIntervalSeconds
         badgeStore = HSBadgeStore(appGroup: HSAppGroup.resolve(opts.appGroup))
         errorReporter = HSErrorReporter(platform: "ios", sdkVersion: sdkVersion)
-        UNUserNotificationCenter.current().delegate = delegate
+        if opts.installsNotificationDelegate { installNotificationDelegate() }
         // Düğmesiz bildirimlerin kapatılma (dismissed) geri bildirimi için; mevcut kategoriler korunur.
         Task { await HSCategories.register(HSCategories.category(identifier: HSCategories.defaultIdentifier, actions: [])) }
         observeLifecycle()
@@ -160,10 +173,37 @@ public enum HeroSignal {
         start()
     }
 
+    /**
+     Gizlilik onayı. Verilince kuyrukta bekleyen işlemler, NSE'nin bekleyen `received` kayıtları ve onay beklerken yerelde
+     yapılan login/logout/opt-in değişiklikleri gönderilir.
+     Geri çekilince (`false`): ağ çağrıları hemen durur (işlenmekte olan kuyruk bir sonraki işlemde durur); gönderilmemiş
+     işlemler ve bekleyen `received` kayıtları silinir, cihazdaki kullanıcı kimliği temizlenir. Push aboneliği kimliği,
+     token ve opt-in tercihi cihazda kalır, sunucudaki abonelik silinmez. Sonraki çağrılar yeniden onay verilene kadar kuyrukta bekler.
+     */
     public static func setConsentGiven(_ given: Bool) {
         guard let store = storage else { return }
         store.consentGiven = given
-        if given { start() } else { queue?.clear(); store.clearIdentity() }
+        if given {
+            start()
+        } else {
+            queue?.clear()
+            _ = store.takePendingReceived()
+            store.clearIdentity()
+        }
+    }
+
+    /// Ağ çağrısı yapılabilir mi (`requiresPrivacyConsent` açıkken onay verilmiş olmalı).
+    static var networkAllowed: Bool {
+        guard let store = storage else { return false }
+        return HSConsent.allowsNetwork(required: options.requiresPrivacyConsent, given: store.consentGiven)
+    }
+
+    /// SDK delegesini atar; önceki delege (uygulamanınki) HeroSignal dışı bildirimler için zayıf referansla saklanır.
+    static func installNotificationDelegate() {
+        let center = UNUserNotificationCenter.current()
+        guard center.delegate !== delegate else { return }
+        delegate.previous = center.delegate
+        center.delegate = delegate
     }
 
     static func start() {
@@ -174,8 +214,13 @@ public enum HeroSignal {
                 HSLog.log(.warn, "config alınamadı: \(error)")
                 reportError("config_failed", "app yapılandırması alınamadı", error: error)
             }
+            // Onay beklerken yerelde yapılan login/logout sunucuya iletilir.
+            await resumePendingIdentityOperation()
             // Daha önce alınmış token varsa kaydı eşitle; izin verildiyse APNs kaydı yenilenir.
             if let token = storage?.deviceToken { await registerIfNeeded(token: token) }
+            await syncPendingOptedIn()
+            // İzin uygulama kapalıyken Ayarlar'dan değişmiş olabilir: `push_capable` sunucuyla eşitlenir.
+            await syncPushCapableIfNeeded()
             let settings = await UNUserNotificationCenter.current().notificationSettings()
             if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
                 await MainActor.run { UIApplication.shared.registerForRemoteNotifications() }
@@ -193,8 +238,9 @@ public enum HeroSignal {
         await MainActor.run { inApp.globalMinIntervalSeconds = interval }
     }
 
-    /// Kuyruğu işler; kalıcı olarak reddedilen işlemler hata raporuna eklenir.
+    /// Kuyruğu işler; kalıcı olarak reddedilen işlemler hata raporuna eklenir. Onay bekleniyorsa işlemler kuyrukta kalır.
     static func flushQueue() async {
+        guard networkAllowed else { return }
         _ = await queue?.flush(perform) { op, error in
             reportError("operation_rejected", "kuyruk işlemi sunucu tarafından reddedildi", error: error, context: ["operation": op["type"] as? String ?? ""])
         }
@@ -251,13 +297,16 @@ public enum HeroSignal {
         }
         let sync = HSTokenSync { method, path, body in try await api.request(method, path, body: body) }
         do {
-            let result = try await sync.sync(subscriptionId: store.subscriptionId, registeredToken: store.registeredToken, token: token, device: await deviceInfo(), user: user)
+            let device = await deviceInfo()
+            let result = try await sync.sync(subscriptionId: store.subscriptionId, registeredToken: store.registeredToken, token: token, device: device, user: user)
             switch result {
             case .unchanged:
                 return
             case .updated:
                 store.registeredToken = token
+                store.syncedPushCapable = device["push_capable"] as? Bool
             case let .created(subscriptionId, userId, externalId):
+                store.syncedPushCapable = device["push_capable"] as? Bool
                 store.subscriptionId = subscriptionId
                 store.userId = userId
                 store.externalId = externalId
@@ -266,6 +315,7 @@ public enum HeroSignal {
                 if !store.optedIn {
                     _ = try? await api.request("PATCH", "/subscriptions/\(subscriptionId)", body: HSOwnership.withProof(["opted_in": false], registeredToken: token))
                 }
+                store.optedInSyncPending = false
                 inApp.onSubscriptionChanged()
             }
             notifySubscription()
@@ -278,21 +328,21 @@ public enum HeroSignal {
 
     static func deviceInfo() async -> [String: Any] {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
+        cacheAuthorizationStatus(settings.authorizationStatus)
         let device = await UIDevice.current
         let model = await device.model
         let systemVersion = await device.systemVersion
-        return [
-            "model": model,
-            "os": "iOS",
-            "os_version": systemVersion,
-            "app_version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? NSNull(),
-            "sdk_version": sdkVersion,
-            "sdk_platform": "ios",
-            "locale": Locale.current.identifier.replacingOccurrences(of: "_", with: "-"),
-            "timezone": TimeZone.current.identifier,
-            "push_capable": settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional,
-            "push_environment": pushEnvironment(),
-        ]
+        // `push_capable` bildirim iznini yansıtır; false ise sunucu push aboneliğini `pending` tutar.
+        return HSDeviceInfo.make(
+            model: model,
+            osVersion: systemVersion,
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+            sdkVersion: sdkVersion,
+            locale: Locale.current.identifier.replacingOccurrences(of: "_", with: "-"),
+            timezone: TimeZone.current.identifier,
+            pushCapable: HSPermissionTracker.isGranted(settings.authorizationStatus),
+            pushEnvironment: pushEnvironment()
+        )
     }
 
     /// APNs ortamı: açık seçenek → DEBUG derlemesi → gömülü provisioning profilinin `aps-environment` değeri.
@@ -408,31 +458,40 @@ public enum HeroSignal {
 
     // MARK: - Kuyruk
 
+    /// İşlemi kalıcı kuyruğa yazar; onay bekleniyorsa ağ çağrısı yapılmaz, `setConsentGiven(true)` sonrası gönderilir.
     static func enqueue(_ op: [String: Any]) {
         queue?.enqueue(op)
+        guard networkAllowed else { return }
         Task { await flushQueue() }
     }
 
     static func perform(_ op: [String: Any]) async throws {
         guard let store = storage, let api else { return }
+        // Onay işleme sırasında geri çekildiyse kuyruk durur (yeniden denenebilir hata işlemi kuyrukta bırakır).
+        guard networkAllowed else { throw HSApiError(status: 0, code: "CONSENT_REQUIRED", message: "gizlilik onayı bekleniyor") }
         switch op["type"] as? String {
         case "tags", "properties":
-            guard let userId = store.userId else { throw HSApiError(status: 0, code: "NO_USER", message: "kullanıcı yok") }
+            // Kullanıcı kimliği abonelik kaydıyla gelir; o zamana kadar işlem yerinde bekler, sonrakiler engellenmez.
+            guard let userId = store.userId else { throw HSQueueDeferred("kullanıcı yok") }
             var body: [String: Any] = op["type"] as? String == "tags" ? ["tags": op["tags"] ?? [:]] : ["properties": op["properties"] ?? [:]]
             if let hash = store.userIdentityHash { body["identity_hash"] = hash }
             let result = try await api.request("PATCH", "/users/\(userId)", body: body)
             store.tags = result["tags"] as? [String: String] ?? store.tags
         case "event", "event_batch":
-            guard let subId = store.subscriptionId else { return }
+            // Abonelik (push, yoksa e-posta/SMS) oluşana kadar olaylar kuyrukta bekler.
+            guard let subId = engagementSubscriptionId() else { throw HSQueueDeferred("abonelik yok") }
             let ops: [[String: Any]] = op["type"] as? String == "event" ? [op] : (op["events"] as? [[String: Any]] ?? [])
-            let events: [[String: Any]] = ops.map { e in
-                var event: [String: Any] = ["name": e["name"] ?? "", "properties": e["properties"] ?? [:], "occurred_at": e["occurred_at"] ?? "", "subscription_id": subId]
-                if let value = e["value"] { event["value"] = value }
-                return event
-            }
+            // Sahiplik kanıtı (ADR-0016 Karar 8): kayıtlı token'ın/kanonik adresin özeti; kimlikli kullanıcıda identity_hash.
+            let events = HSOwnership.eventItems(
+                ops,
+                subscriptionId: subId,
+                registeredToken: ownershipToken(store, subscriptionId: subId),
+                identityHash: store.externalId != nil ? store.userIdentityHash : nil
+            )
             try await api.request("POST", "/events", body: ["events": events])
         case "session_start", "session_end":
-            guard let subId = store.subscriptionId else { return }
+            // Push aboneliği oluşana kadar oturum kayıtları kuyrukta bekler.
+            guard let subId = store.subscriptionId else { throw HSQueueDeferred("push aboneliği yok") }
             var body: [String: Any] = ["subscription_id": subId, "sdk_version": sdkVersion]
             // Oturumda uygulama sürümü de güncellenir (docs/plan/06 "Token yaşam döngüsü").
             if let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String { body["app_version"] = appVersion }
@@ -441,12 +500,12 @@ public enum HeroSignal {
             let identityHash = store.externalId != nil ? store.userIdentityHash : nil
             try await api.request("POST", "/sessions", body: HSOwnership.withProof(body, registeredToken: store.registeredToken, identityHash: identityHash))
         case "alias_add":
-            guard let userId = store.userId else { throw HSApiError(status: 0, code: "NO_USER", message: "kullanıcı yok") }
+            guard let userId = store.userId else { throw HSQueueDeferred("kullanıcı yok") }
             var body: [String: Any] = ["identity": op["aliases"] ?? [:]]
             if let hash = store.userIdentityHash { body["identity_hash"] = hash }
             try await api.request("PATCH", "/users/\(userId)/identity", body: body)
         case "alias_remove":
-            guard let userId = store.userId else { throw HSApiError(status: 0, code: "NO_USER", message: "kullanıcı yok") }
+            guard let userId = store.userId else { throw HSQueueDeferred("kullanıcı yok") }
             let label = (op["label"] as? String ?? "").addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
             var query = ""
             if let hash = store.userIdentityHash?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) { query = "?identity_hash=\(hash)" }
@@ -457,7 +516,12 @@ public enum HeroSignal {
             try await removeContact(channel: op["channel"] as? String ?? "", address: op["address"] as? String ?? "")
         case "in_app_event":
             guard let subId = engagementSubscriptionId(), let messageId = op["message_id"] as? String else { return }
-            var body: [String: Any] = ["subscription_id": subId, "type": op["event"] as? String ?? ""]
+            // Kanıt gönderim anındaki abonelikten çözülür (kayıtlı token veya kanonik adres özeti; ADR-0016).
+            var body = HSOwnership.subscriptionBody(
+                ["type": op["event"] as? String ?? ""],
+                subscriptionId: subId,
+                registeredToken: ownershipToken(store, subscriptionId: subId)
+            )
             if let button = op["button_id"] as? String, !button.isEmpty { body["button_id"] = button }
             if let variant = op["variant_id"] as? String, !variant.isEmpty { body["variant_id"] = variant }
             let path = messageId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? messageId
@@ -478,10 +542,7 @@ public enum HeroSignal {
     /// NSE'nin uygulama kapalıyken kuyruğa yazdığı `received` kayıtları.
     static func flushPendingReceived() async {
         guard let store = storage else { return }
-        let pending = store.pendingReceived
-        guard !pending.isEmpty else { return }
-        store.pendingReceived = []
-        for id in pending { enqueue(["type": "received", "delivery_id": id, "at": Date().timeIntervalSince1970]) }
+        for id in store.takePendingReceived() { enqueue(["type": "received", "delivery_id": id, "at": Date().timeIntervalSince1970]) }
     }
 
     // MARK: - Oturum
@@ -490,8 +551,10 @@ public enum HeroSignal {
         guard observers.isEmpty else { return }
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-            sessionStartedAt = Date()
-            enqueue(["type": "session_start", "at": Date().timeIntervalSince1970])
+            sessionExpiryWork?.cancel()
+            sessionExpiryWork = nil
+            // 30 sn'den kısa arka plan aynı oturumu sürdürür; daha uzunsa önceki oturum kapanır ve yenisi başlar.
+            for transition in sessionTracker?.enterForeground(at: Date()) ?? [] { enqueueSession(transition) }
             inApp.onSessionStart()
             if let click = pendingClick, !clickListeners.isEmpty { pendingClick = nil; clickListeners.notify(click) }
             Task { await flushPendingReceived() }
@@ -500,11 +563,26 @@ public enum HeroSignal {
         })
         observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
             inApp.onSessionEnd()
-            guard let started = sessionStartedAt else { return }
-            sessionStartedAt = nil
-            // Oturum süresi (`usage_seconds`, ADR-0019 §8) arka plana geçişte `POST /sessions { duration_seconds }` ile gider.
-            enqueue(["type": "session_end", "duration_seconds": Int(Date().timeIntervalSince(started)), "at": Date().timeIntervalSince1970])
+            // Arka plan anı kalıcıdır: süreç sonlansa da pencere bir sonraki açılışta değerlendirilir.
+            sessionTracker?.enterBackground(at: Date())
+            // Uygulama arka planda çalışmayı sürdürürse pencere dolunca oturum kapatılır (askıdaysa açılışta kapanır).
+            let work = DispatchWorkItem {
+                if let transition = sessionTracker?.expire(at: Date()) { enqueueSession(transition) }
+            }
+            sessionExpiryWork?.cancel()
+            sessionExpiryWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + HSSessionTracker.backgroundTimeout, execute: work)
         })
+    }
+
+    /// Oturum geçişini kuyruğa yazar; süre (`usage_seconds`, ADR-0019 §8) `POST /sessions { duration_seconds }` ile gider.
+    static func enqueueSession(_ transition: HSSessionTracker.Transition) {
+        switch transition {
+        case .start:
+            enqueue(["type": "session_start", "at": Date().timeIntervalSince1970])
+        case let .end(durationSeconds):
+            enqueue(["type": "session_end", "duration_seconds": durationSeconds, "at": Date().timeIntervalSince1970])
+        }
     }
 
     // MARK: - Teslimat geri bildirimi
@@ -533,7 +611,7 @@ public enum HeroSignal {
     static func notifySubscription() {
         Task {
             let s = await User.pushSubscription.state()
-            subscriptionObservers.forEach { $0(s) }
+            subscriptionObservers.notify(s)
         }
     }
 
@@ -545,77 +623,156 @@ public enum HeroSignal {
     static func checkPermissionChange() {
         Task {
             let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+            cacheAuthorizationStatus(status)
             let granted = HSPermissionTracker.isGranted(status)
             let changed = await MainActor.run { permissionTracker.update(granted) }
-            guard changed else { return }
+            guard changed else {
+                // İlk ölçüm: izin uygulama kapalıyken değişmiş olabilir; sunucudaki `push_capable` farklıysa eşitlenir.
+                await syncPushCapableIfNeeded()
+                return
+            }
             if granted { await MainActor.run { UIApplication.shared.registerForRemoteNotifications() } }
             await syncPermissionState()
             notifySubscription()
         }
     }
 
+    /// Sunucuya en son yazılan `push_capable` güncel izinden farklıysa aboneliği PATCH eder.
+    static func syncPushCapableIfNeeded() async {
+        guard let store = storage, store.subscriptionId != nil else { return }
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        cacheAuthorizationStatus(status)
+        if store.syncedPushCapable != HSPermissionTracker.isGranted(status) { await syncPermissionState() }
+    }
+
     /// İzin değişikliğini kayıtlı aboneliğe yansıtır (gizlilik onayı bekleniyorsa ağ çağrısı yapılmaz).
     static func syncPermissionState() async {
         guard let store = storage, let api, let subId = store.subscriptionId else { return }
-        if options.requiresPrivacyConsent && !store.consentGiven { return }
+        guard networkAllowed else { return }
         do {
-            _ = try await api.request("PATCH", "/subscriptions/\(subId)", body: HSOwnership.withProof(["device": await deviceInfo()], registeredToken: store.registeredToken))
+            let device = await deviceInfo()
+            _ = try await api.request("PATCH", "/subscriptions/\(subId)", body: HSOwnership.withProof(["device": device], registeredToken: store.registeredToken))
+            store.syncedPushCapable = device["push_capable"] as? Bool
         } catch {
             HSLog.log(.warn, "izin sonrası abonelik güncellenemedi: \(error)")
             reportError("subscription_update_failed", "izin sonrası abonelik güncellenemedi", error: error)
         }
     }
 
-    // MARK: - Public API
-
-    public static func login(_ externalId: String, identityHash: String? = nil) {
-        guard let store = storage, let api else { return }
-        if identityVerificationRequired && identityHash == nil {
-            HSLog.log(.error, "Bu app için identityHash zorunlu"); return
-        }
-        Task {
-            if let subId = store.subscriptionId {
-                let body = HSOwnership.loginBody(externalId: externalId, identityHash: identityHash, registeredToken: store.registeredToken)
-                do {
-                    let result = try await api.request("POST", "/subscriptions/\(subId)/login", body: body)
-                    store.userId = result["user_id"] as? String
-                    store.externalId = result["external_id"] as? String
-                    store.userIdentityHash = identityHash
-                    store.tags = result["tags"] as? [String: String] ?? [:]
-                } catch {
-                    HSLog.log(.error, "login başarısız: \(error)")
-                    reportError("login_failed", "login başarısız", error: error)
-                }
-                await linkContacts(externalId: externalId, identityHash: identityHash)
-            } else {
-                store.externalId = externalId
-                store.pendingIdentityHash = identityHash
-                store.userIdentityHash = identityHash
-                // Push aboneliği yoksa kullanıcı e-posta/SMS aboneliği üzerinden bağlanır.
-                if let result = await linkContacts(externalId: externalId, identityHash: identityHash) {
-                    store.userId = result["user_id"] as? String
-                    store.tags = result["tags"] as? [String: String] ?? [:]
-                }
-                if let token = store.deviceToken { await registerIfNeeded(token: token) }
-            }
-            inApp.reset()
-            inApp.onSubscriptionChanged()
-            await flushQueue()
+    /// Onay beklerken yapılan `optIn`/`optOut` değişikliğini sunucuya iletir.
+    static func syncPendingOptedIn() async {
+        guard let store = storage, let api, store.optedInSyncPending, let subId = store.subscriptionId else { return }
+        guard networkAllowed else { return }
+        do {
+            _ = try await api.request("PATCH", "/subscriptions/\(subId)", body: HSOwnership.withProof(["opted_in": store.optedIn], registeredToken: store.registeredToken))
+            store.optedInSyncPending = false
+        } catch {
+            HSLog.log(.warn, "opt-in durumu güncellenemedi: \(error)")
+            reportError("subscription_update_failed", "opt-in durumu güncellenemedi", error: error)
         }
     }
 
-    public static func logout() {
-        guard let store = storage, let api else { return }
-        Task {
-            let proof = HSOwnership.withProof([:], registeredToken: store.registeredToken, identityHash: store.externalId != nil ? store.userIdentityHash : nil)
-            if let subId = store.subscriptionId, let result = try? await api.request("POST", "/subscriptions/\(subId)/logout", body: proof) {
-                store.clearIdentity()
-                store.userId = result["user_id"] as? String
-            } else {
-                store.clearIdentity()
-            }
+    /// Son okunan bildirim izni (`pushSubscription.optedIn` için önbellek).
+    static func cacheAuthorizationStatus(_ status: UNAuthorizationStatus) {
+        authorizationLock.lock()
+        cachedAuthorizationStatus = status
+        authorizationLock.unlock()
+    }
+
+    static var lastAuthorizationStatus: UNAuthorizationStatus? {
+        authorizationLock.lock()
+        defer { authorizationLock.unlock() }
+        return cachedAuthorizationStatus
+    }
+
+    // MARK: - Public API
+
+    public static func login(_ externalId: String, identityHash: String? = nil) {
+        guard let store = storage, api != nil else { return }
+        if identityVerificationRequired && identityHash == nil {
+            HSLog.log(.error, "Bu app için identityHash zorunlu"); return
+        }
+        guard networkAllowed else {
+            // Onay bekleniyor: kimlik yerelde tutulur, onay verilince `start()` sunucuya bağlar.
+            store.externalId = externalId
+            store.pendingIdentityHash = identityHash
+            store.userIdentityHash = identityHash
+            store.pendingIdentityOperation = "login"
             inApp.reset()
-            inApp.onSubscriptionChanged()
+            return
+        }
+        Task { await performLogin(externalId: externalId, identityHash: identityHash) }
+    }
+
+    static func performLogin(externalId: String, identityHash: String?) async {
+        guard let store = storage, let api else { return }
+        if let subId = store.subscriptionId {
+            let body = HSOwnership.loginBody(externalId: externalId, identityHash: identityHash, registeredToken: store.registeredToken)
+            do {
+                let result = try await api.request("POST", "/subscriptions/\(subId)/login", body: body)
+                store.userId = result["user_id"] as? String
+                store.externalId = result["external_id"] as? String
+                store.userIdentityHash = identityHash
+                store.tags = result["tags"] as? [String: String] ?? [:]
+            } catch {
+                HSLog.log(.error, "login başarısız: \(error)")
+                reportError("login_failed", "login başarısız", error: error)
+            }
+            await linkContacts(externalId: externalId, identityHash: identityHash)
+        } else {
+            store.externalId = externalId
+            store.pendingIdentityHash = identityHash
+            store.userIdentityHash = identityHash
+            // Push aboneliği yoksa kullanıcı e-posta/SMS aboneliği üzerinden bağlanır.
+            if let result = await linkContacts(externalId: externalId, identityHash: identityHash) {
+                store.userId = result["user_id"] as? String
+                store.tags = result["tags"] as? [String: String] ?? [:]
+            }
+            if let token = store.deviceToken { await registerIfNeeded(token: token) }
+        }
+        inApp.reset()
+        inApp.onSubscriptionChanged()
+        await flushQueue()
+    }
+
+    public static func logout() {
+        guard let store = storage, api != nil else { return }
+        guard networkAllowed else {
+            // Onay bekleniyor: kimlik yerelde silinir; kayıtlı abonelik varsa onay verilince sunucuda da çıkış yapılır.
+            let hadSubscription = store.subscriptionId != nil
+            store.clearIdentity()
+            store.pendingIdentityOperation = hadSubscription ? "logout" : nil
+            inApp.reset()
+            return
+        }
+        Task { await performLogout() }
+    }
+
+    static func performLogout() async {
+        guard let store = storage, let api else { return }
+        let proof = HSOwnership.withProof([:], registeredToken: store.registeredToken, identityHash: store.externalId != nil ? store.userIdentityHash : nil)
+        if let subId = store.subscriptionId, let result = try? await api.request("POST", "/subscriptions/\(subId)/logout", body: proof) {
+            store.clearIdentity()
+            store.userId = result["user_id"] as? String
+        } else {
+            store.clearIdentity()
+        }
+        inApp.reset()
+        inApp.onSubscriptionChanged()
+    }
+
+    /// Onay beklerken yerelde yapılan login/logout'u sunucuya iletir (`start()` içinden).
+    static func resumePendingIdentityOperation() async {
+        guard let store = storage, let operation = store.pendingIdentityOperation else { return }
+        store.pendingIdentityOperation = nil
+        switch operation {
+        case "login":
+            guard let externalId = store.externalId else { return }
+            await performLogin(externalId: externalId, identityHash: store.userIdentityHash)
+        case "logout":
+            await performLogout()
+        default:
+            break
         }
     }
 
@@ -738,11 +895,30 @@ public enum HeroSignal {
             public static var token: String? { storage?.deviceToken }
             public static func state() async -> HSPushSubscriptionState {
                 let settings = await UNUserNotificationCenter.current().notificationSettings()
-                return HSPushSubscriptionState(id: id, token: token, optedIn: (storage?.optedIn ?? false) && settings.authorizationStatus == .authorized, permission: settings.authorizationStatus)
+                cacheAuthorizationStatus(settings.authorizationStatus)
+                return HSPushSubscriptionState(id: id, token: token, optedIn: isOptedIn(settings.authorizationStatus), permission: settings.authorizationStatus)
             }
+
+            /**
+             Önbellekten eşzamanlı opt-in durumu: kullanıcı tercihi (`optIn`/`optOut`) ve son okunan bildirim izni.
+             İzin henüz okunmadıysa (başlatmanın hemen ardından) false döner; kesin değer için `await state()`.
+             */
+            public static var optedIn: Bool { lastAuthorizationStatus.map(isOptedIn) ?? false }
+
+            /// `state()` ile aynı kural: tercih açık ve bildirim izni tam (`authorized`).
+            static func isOptedIn(_ status: UNAuthorizationStatus) -> Bool {
+                (storage?.optedIn ?? false) && status == .authorized
+            }
+
             public static func optIn() {
                 guard let store = storage else { return }
                 store.optedIn = true
+                guard networkAllowed else {
+                    // Onay bekleniyor: tercih yerelde tutulur, onay verilince sunucuya iletilir.
+                    store.optedInSyncPending = true
+                    notifySubscription()
+                    return
+                }
                 Task {
                     if let subId = store.subscriptionId { _ = try? await api?.request("PATCH", "/subscriptions/\(subId)", body: HSOwnership.withProof(["opted_in": true], registeredToken: store.registeredToken)) }
                     else if let token = store.deviceToken { await registerIfNeeded(token: token) }
@@ -753,12 +929,24 @@ public enum HeroSignal {
             public static func optOut() {
                 guard let store = storage else { return }
                 store.optedIn = false
+                guard networkAllowed else {
+                    store.optedInSyncPending = true
+                    notifySubscription()
+                    return
+                }
                 Task {
                     if let subId = store.subscriptionId { _ = try? await api?.request("PATCH", "/subscriptions/\(subId)", body: HSOwnership.withProof(["opted_in": false], registeredToken: store.registeredToken)) }
                     notifySubscription()
                 }
             }
-            public static func addObserver(_ observer: @escaping (HSPushSubscriptionState) -> Void) { subscriptionObservers.append(observer) }
+
+            /// Abonelik durumu gözlemcisi; kaldırmak için dönen belirteç `removeObserver` ile verilir.
+            @discardableResult
+            public static func addObserver(_ observer: @escaping (HSPushSubscriptionState) -> Void) -> HSListenerToken {
+                subscriptionObservers.add(observer)
+            }
+
+            public static func removeObserver(_ token: HSListenerToken) { _ = subscriptionObservers.remove(token) }
         }
     }
 
@@ -809,6 +997,26 @@ public enum HeroSignal {
             foregroundListeners.add(listener)
         }
         public static func removeForegroundLifecycleListener(_ token: HSListenerToken) { _ = foregroundListeners.remove(token) }
+
+        /**
+         Delegeyi kendisi yöneten uygulamalar (`HSOptions.installsNotificationDelegate = false`) için: kendi
+         `userNotificationCenter(_:willPresent:withCompletionHandler:)` içinden çağırın. HeroSignal bildirimiyse işlenir,
+         `completion` HeroSignal tarafından tam bir kez çağrılır ve true döner; değilse false döner ve `completion` çağrılmaz
+         (karar uygulamanındır).
+         */
+        @discardableResult
+        public static func handleWillPresent(_ notification: UNNotification, completion: @escaping (UNNotificationPresentationOptions) -> Void) -> Bool {
+            delegate.handleWillPresent(notification, completion: completion)
+        }
+
+        /**
+         `userNotificationCenter(_:didReceive:withCompletionHandler:)` içinden çağırın. HeroSignal bildirimiyse tıklama/kapatma
+         işlenir, `completion` tam bir kez çağrılır ve true döner; değilse false döner ve `completion` çağrılmaz.
+         */
+        @discardableResult
+        public static func handleDidReceive(_ response: UNNotificationResponse, completion: @escaping () -> Void) -> Bool {
+            delegate.handleDidReceive(response, completion: completion)
+        }
 
         /// Uygulama rozetini ayarlar ve NSE ile paylaşılan sayacı eşitler (`badge_inc` bu değerin üzerine eklenir).
         public static func setBadgeCount(_ count: Int) {
@@ -885,7 +1093,9 @@ public enum HeroSignal {
         }
 
         /// Düğme tıklamaları (`messageId`, `actionId`, `url`); ana iş parçacığında çağrılır.
-        public static func addClickListener(_ listener: @escaping (HSInAppClickEvent) -> Void) { inApp.clickListeners.append(listener) }
+        @discardableResult
+        public static func addClickListener(_ listener: @escaping (HSInAppClickEvent) -> Void) -> HSListenerToken { inApp.clickListeners.add(listener) }
+        public static func removeClickListener(_ token: HSListenerToken) { _ = inApp.clickListeners.remove(token) }
         /// Yaşam döngüsü dinleyicisi (zayıf referansla tutulur).
         public static func addLifecycleListener(_ listener: HSInAppLifecycleListener) { inApp.lifecycleListeners.append(.init(value: listener)) }
         public static func removeLifecycleListener(_ listener: HSInAppLifecycleListener) { inApp.lifecycleListeners.removeAll { $0.value === listener } }
@@ -896,24 +1106,29 @@ public enum HeroSignal {
 
     /// Bildirim kutusu (`add_to_inbox` mesajları). Login'de `identityHash` verildiyse isteklere eklenir.
     public enum Inbox {
-        private struct Ctx { let userId: String; let subscriptionId: String; let identityHash: String? }
+        /// `registeredToken`: aboneliğin sahiplik kanıtı kaynağı (push: kayıtlı token, e-posta/SMS: kanonik adres; ADR-0016).
+        private struct Ctx { let userId: String; let subscriptionId: String; let registeredToken: String?; let identityHash: String? }
 
         private static func ctx() throws -> (Ctx, HSApi) {
             guard let store = storage, let api else { throw HSError.notInitialized }
             guard let subId = engagementSubscriptionId() else { throw HSError.noSubscription }
             guard let userId = store.userId else { throw HSError.noUser }
-            return (Ctx(userId: userId, subscriptionId: subId, identityHash: store.userIdentityHash), api)
+            let c = Ctx(
+                userId: userId,
+                subscriptionId: subId,
+                registeredToken: ownershipToken(store, subscriptionId: subId),
+                identityHash: store.userIdentityHash
+            )
+            return (c, api)
         }
 
         private static func enc(_ value: String) -> String { value.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? value }
         private static func base(_ c: Ctx) -> String { "/users/\(enc(c.userId))/inbox" }
         private static func query(_ c: Ctx) -> String {
-            "subscription_id=\(enc(c.subscriptionId))" + (c.identityHash.map { "&identity_hash=\(enc($0))" } ?? "")
+            HSOwnership.subscriptionQuery(subscriptionId: c.subscriptionId, registeredToken: c.registeredToken, identityHash: c.identityHash)
         }
         private static func body(_ c: Ctx) -> [String: Any] {
-            var b: [String: Any] = ["subscription_id": c.subscriptionId]
-            if let hash = c.identityHash { b["identity_hash"] = hash }
-            return b
+            HSOwnership.subscriptionBody(subscriptionId: c.subscriptionId, registeredToken: c.registeredToken, identityHash: c.identityHash)
         }
 
         /// Öğeler (yeniden eskiye), okunmamış sayısı ve sonraki sayfa imleci (`limit` 1-200).
@@ -956,13 +1171,40 @@ public enum HeroSignal {
     }
 }
 
-/// UNUserNotificationCenterDelegate: ön plan gösterimi, tıklama → opened + yönlendirme.
+/**
+ UNUserNotificationCenterDelegate: ön plan gösterimi, tıklama → opened + yönlendirme. HeroSignal dışı bildirimler,
+ SDK delegesi atanmadan önceki delegeye (zayıf referans) iletilir; tamamlama bloğu her durumda tam bir kez çağrılır.
+ */
 final class HSNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    /// SDK delegesinden önce atanmış (uygulamanın) delege.
+    weak var previous: UNUserNotificationCenterDelegate?
+
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        guard let n = HSNotification(userInfo: notification.request.content.userInfo) else { completionHandler([.banner, .sound, .badge]); return }
+        if handleWillPresent(notification, completion: completionHandler) { return }
+        // Önceki delege uyguluyorsa karar (ve tamamlama) ona aittir.
+        if let previous = self.previous,
+           previous.userNotificationCenter?(center, willPresent: notification, withCompletionHandler: completionHandler) != nil { return }
+        completionHandler([.banner, .sound, .badge])
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        if handleDidReceive(response, completion: completionHandler) { return }
+        if let previous = self.previous,
+           previous.userNotificationCenter?(center, didReceive: response, withCompletionHandler: completionHandler) != nil { return }
+        completionHandler()
+    }
+
+    /// Uygulama içi bildirim ayarları ekranı isteği HeroSignal'i ilgilendirmez; önceki delegeye iletilir.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, openSettingsFor notification: UNNotification?) {
+        previous?.userNotificationCenter?(center, openSettingsFor: notification)
+    }
+
+    /// HeroSignal bildirimiyse ön plan kararını verir (tamamlama tam bir kez) ve true döner; değilse dokunmaz.
+    func handleWillPresent(_ notification: UNNotification, completion: @escaping (UNNotificationPresentationOptions) -> Void) -> Bool {
+        guard let n = HSNotification(userInfo: notification.request.content.userInfo) else { return false }
         if let id = n.deliveryId { HeroSignal.reportReceived(id) }
         let event = HSForegroundEvent(notification: n) { show in
-            completionHandler(show ? [.banner, .sound, .badge, .list] : [])
+            completion(show ? [.banner, .sound, .badge, .list] : [])
         }
         HeroSignal.foregroundListeners.notify(event)
         if !event.prevented {
@@ -971,19 +1213,21 @@ final class HSNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
             // Ertelenmiş karar: süre içinde display() çağrılmazsa gösterilmez.
             DispatchQueue.main.asyncAfter(deadline: .now() + HSForegroundEvent.displayTimeout) { event.complete(false) }
         }
+        return true
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
-        if let n = HSNotification(userInfo: response.notification.request.content.userInfo) {
-            switch response.actionIdentifier {
-            case UNNotificationDismissActionIdentifier:
-                HeroSignal.reportDismissed(n)
-            case UNNotificationDefaultActionIdentifier:
-                HeroSignal.reportOpened(n, actionId: nil)
-            default:
-                HeroSignal.reportOpened(n, actionId: response.actionIdentifier)
-            }
+    /// HeroSignal bildirimiyse tıklama/kapatmayı işler, tamamlamayı çağırır ve true döner; değilse dokunmaz.
+    func handleDidReceive(_ response: UNNotificationResponse, completion: @escaping () -> Void) -> Bool {
+        guard let n = HSNotification(userInfo: response.notification.request.content.userInfo) else { return false }
+        switch response.actionIdentifier {
+        case UNNotificationDismissActionIdentifier:
+            HeroSignal.reportDismissed(n)
+        case UNNotificationDefaultActionIdentifier:
+            HeroSignal.reportOpened(n, actionId: nil)
+        default:
+            HeroSignal.reportOpened(n, actionId: response.actionIdentifier)
         }
-        completionHandler()
+        completion()
+        return true
     }
 }

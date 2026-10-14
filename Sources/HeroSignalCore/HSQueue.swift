@@ -1,5 +1,17 @@
 import Foundation
 
+/**
+ İşlem henüz gönderilemez (ör. abonelik/kullanıcı kimliği yok): kuyrukta yerinde kalır, sonraki işlemler engellenmeden
+ işlenir ve bir sonraki `flush` çağrısında yeniden denenir.
+ */
+public struct HSQueueDeferred: Error, Equatable {
+    public let reason: String
+
+    public init(_ reason: String) {
+        self.reason = reason
+    }
+}
+
 /// Kalıcı işlem kuyruğu (UserDefaults); ardışık tag yamaları birleştirilir.
 public final class HSQueue {
     public static let maxSize = 500
@@ -39,24 +51,39 @@ public final class HSQueue {
         return run
     }
 
-    /// Sırayla işler; ardışık olaylar tek `event_batch` işlemi olarak gönderilir. Geçici hatada durur (false); 4xx'te atılır.
-    /// - Parameter onRejected: Kalıcı olarak reddedilip atılan işlem (SDK hata raporu için).
+    /**
+     Sırayla işler; ardışık olaylar tek `event_batch` işlemi olarak gönderilir. Geçici hatada durur (false); 4xx'te atılır.
+     `HSQueueDeferred` fırlatan işlem kuyrukta yerinde bırakılır ve sonrakilerle devam edilir (ertelenen varsa false).
+     - Parameter onRejected: Kalıcı olarak reddedilip atılan işlem (SDK hata raporu için).
+     */
     public func flush(_ handler: ([String: Any]) async throws -> Void, onRejected: (([String: Any], Error) -> Void)? = nil) async -> Bool {
-        while let head = items.first {
-            let events = HSQueue.leadingEvents(items)
+        // Kuyruğun başında bırakılan (ertelenen) işlem sayısı; işlenecek sıradaki işlem bu konumdadır.
+        var deferred = 0
+        while true {
+            let pending = Array(items.dropFirst(deferred))
+            guard let head = pending.first else { break }
+            let events = HSQueue.leadingEvents(pending)
             let unit: [String: Any] = events.count > 1 ? ["type": "event_batch", "events": events, "at": head["at"] ?? 0] : head
             let consumed = events.count > 1 ? events.count : 1
             do {
                 try await handler(unit)
+            } catch is HSQueueDeferred {
+                deferred += consumed
+                continue
             } catch let error as HSApiError where error.isRetryable {
                 return false
             } catch {
                 // kalıcı hata: atla
                 onRejected?(unit, error)
             }
-            lock.lock(); items = Array(items.dropFirst(consumed)); lock.unlock()
+            lock.lock()
+            var current = items
+            let end = min(deferred + consumed, current.count)
+            if deferred < end { current.removeSubrange(deferred..<end) }
+            items = current
+            lock.unlock()
         }
-        return true
+        return deferred == 0
     }
 
     public func clear() { items = [] }

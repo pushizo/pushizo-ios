@@ -6,6 +6,13 @@ public struct HSApiError: Error, Equatable {
     public let code: String
     public let message: String
     public var isRetryable: Bool { status == 0 || status == 429 || status >= 500 }
+
+    /// SPM'de uygulama modülünden de (ör. kuyruğu durduran yerel hata) oluşturulabilmesi için açık başlatıcı.
+    public init(status: Int, code: String, message: String) {
+        self.status = status
+        self.code = code
+        self.message = message
+    }
 }
 
 /// `/sdk/v1/apps/{appId}` uçlarına JSON istek (URLSession, async/await).

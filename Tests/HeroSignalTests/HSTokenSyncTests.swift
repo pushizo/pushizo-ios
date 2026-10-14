@@ -73,6 +73,31 @@ final class HSTokenSyncTests: XCTestCase {
         XCTAssertEqual(logout["identity_hash"] as? String, identity)
     }
 
+    func testInAppAndInboxOwnershipProof() {
+        // In-app/inbox sorgusu: subscription_id + kayıtlı token'ın (e-posta/SMS'te kanonik adresin) özeti + identity_hash.
+        let identity = String(repeating: "d", count: 64)
+        XCTAssertEqual(
+            HSOwnership.subscriptionQuery(subscriptionId: "sub_push", registeredToken: "apns_tok", identityHash: identity),
+            "subscription_id=sub_push&token_hash=\(HSOwnership.tokenHash("apns_tok"))&identity_hash=\(identity)"
+        )
+        XCTAssertEqual(
+            HSOwnership.subscriptionQuery(subscriptionId: "sub_mail", registeredToken: "ayse@example.com"),
+            "subscription_id=sub_mail&token_hash=\(HSOwnership.tokenHash("ayse@example.com"))"
+        )
+        // Kanıt yoksa yalnızca abonelik kimliği; sorgu değeri güvenli kodlanır.
+        XCTAssertEqual(HSOwnership.subscriptionQuery(subscriptionId: "a&b", registeredToken: nil), "subscription_id=a%26b")
+
+        // In-app olayı ve inbox read/read-all gövdesi.
+        let event = HSOwnership.subscriptionBody(["type": "impression"], subscriptionId: "sub_mail", registeredToken: "ayse@example.com")
+        XCTAssertEqual(event["subscription_id"] as? String, "sub_mail")
+        XCTAssertEqual(event["type"] as? String, "impression")
+        XCTAssertEqual(event["token_hash"] as? String, HSOwnership.tokenHash("ayse@example.com"))
+        XCTAssertNil(event["identity_hash"])
+        let read = HSOwnership.subscriptionBody(subscriptionId: "sub_push", registeredToken: "apns_tok", identityHash: identity)
+        XCTAssertEqual(Set(read.keys), ["subscription_id", "token_hash", "identity_hash"])
+        XCTAssertEqual(Set(HSOwnership.subscriptionBody(subscriptionId: "sub_x", registeredToken: nil).keys), ["subscription_id"])
+    }
+
     func testSameTokenSendsNothing() async throws {
         let fake = FakeRequester { _ in XCTFail("istek beklenmiyordu"); return [:] }
         let result = try await fake.sync().sync(subscriptionId: "sub_1", registeredToken: "tok_a", token: "tok_a", device: [:], user: [:])

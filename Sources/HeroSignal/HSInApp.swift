@@ -117,7 +117,7 @@ final class HSInAppController {
     var paused = false
     /// `in_app.min_interval_seconds` (config): herhangi bir gösterimden sonra bu süre dolmadan yeni mesaj gösterilmez.
     var globalMinIntervalSeconds = 0
-    var clickListeners: [(HSInAppClickEvent) -> Void] = []
+    let clickListeners = HSListenerRegistry<HSInAppClickEvent>()
     var lifecycleListeners: [WeakListener] = []
 
     struct WeakListener { weak var value: HSInAppLifecycleListener? }
@@ -227,11 +227,15 @@ final class HSInAppController {
         if let fetchedAt, Date().timeIntervalSince(fetchedAt) < minAge { runPendingSessionStart(); return }
         guard !fetching, let subId = HeroSignal.engagementSubscriptionId(), let api = HeroSignal.api else { return }
         fetching = true
-        let query = subId.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? subId
+        // Sahiplik kanıtı (ADR-0016): kayıtlı token'ın veya kanonik adresin özeti.
+        let query = HSOwnership.subscriptionQuery(
+            subscriptionId: subId,
+            registeredToken: HeroSignal.storage.flatMap { HeroSignal.ownershipToken($0, subscriptionId: subId) }
+        )
         Task {
             var list: [HSInAppMessage]?
             do {
-                list = HSInAppParser.parseList(try await api.request("GET", "/in-app?subscription_id=\(query)"))
+                list = HSInAppParser.parseList(try await api.request("GET", "/in-app?\(query)"))
             } catch {
                 HSLog.log(.warn, "in-app listesi alınamadı: \(error)")
                 if (error as? HSApiError)?.isRetryable != true {
@@ -312,7 +316,7 @@ final class HSInAppController {
         if case let .url(u) = button.action { url = u }
         if case let .deeplink(u) = button.action { url = u }
         let event = HSInAppClickEvent(messageId: message.id, actionId: button.id, url: url)
-        clickListeners.forEach { $0(event) }
+        clickListeners.notify(event)
         switch button.action {
         case let .url(u), let .deeplink(u):
             // Uygulama şeması kayıtlıysa iOS bağlantıyı uygulamanın kendisine (onOpenURL / scene delegate) iletir.

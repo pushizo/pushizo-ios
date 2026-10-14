@@ -22,6 +22,14 @@ public final class HSStorage {
     public var registeredToken: String? { get { defaults.string(forKey: key("registered_token")) } set { defaults.set(newValue, forKey: key("registered_token")) } }
     public var optedIn: Bool { get { defaults.object(forKey: key("opted_in")) as? Bool ?? true } set { defaults.set(newValue, forKey: key("opted_in")) } }
     public var consentGiven: Bool { get { defaults.bool(forKey: key("consent")) } set { defaults.set(newValue, forKey: key("consent")) } }
+    /// Uygulamanın `requiresPrivacyConsent` seçeneği; NSE onay kontrolü için App Group'a yazılır.
+    public var privacyConsentRequired: Bool { get { defaults.bool(forKey: key("consent_required")) } set { defaults.set(newValue, forKey: key("consent_required")) } }
+    /// Onay beklerken yerelde yapılan kimlik işlemi (`login`/`logout`); onay verilince sunucuya iletilir.
+    public var pendingIdentityOperation: String? { get { defaults.string(forKey: key("pending_identity_op")) } set { defaults.set(newValue, forKey: key("pending_identity_op")) } }
+    /// `optIn`/`optOut` sunucuya iletilemedi (onay bekleniyordu); onay verilince `opted_in` PATCH edilir.
+    public var optedInSyncPending: Bool { get { defaults.bool(forKey: key("opted_in_sync_pending")) } set { defaults.set(newValue, forKey: key("opted_in_sync_pending")) } }
+    /// Sunucudaki aboneliğe en son yazılan `device.push_capable`; güncel izinden farklıysa yeniden PATCH edilir.
+    public var syncedPushCapable: Bool? { get { defaults.object(forKey: key("synced_push_capable")) as? Bool } set { defaults.set(newValue, forKey: key("synced_push_capable")) } }
     public var tags: [String: String] { get { defaults.dictionary(forKey: key("tags")) as? [String: String] ?? [:] } set { defaults.set(newValue, forKey: key("tags")) } }
     /// Herhangi bir in-app mesajın bu cihazdaki son gösterimi; app geneli aralık için (ADR-0019 §7).
     public var lastInAppImpressionAt: Date? {
@@ -32,6 +40,36 @@ public final class HSStorage {
     public var inAppMinIntervalSeconds: Int { get { defaults.integer(forKey: key("in_app_min_interval_seconds")) } set { defaults.set(newValue, forKey: key("in_app_min_interval_seconds")) } }
     /// NSE: uygulama kapalıyken gönderilemeyen `received` bildirimleri.
     public var pendingReceived: [String] { get { defaults.stringArray(forKey: key("pending_received")) ?? [] } set { defaults.set(newValue, forKey: key("pending_received")) } }
+
+    /// `pendingReceived` oku-değiştir-yaz işlemleri için (aynı süreçteki NSE örnekleri ve uygulama).
+    private static let pendingReceivedLock = NSLock()
+    /// En fazla bu kadar bekleyen `received` kaydı tutulur (en eskiler atılır).
+    public static let pendingReceivedMax = 100
+
+    /// Teslimat kimliğini bekleyen `received` listesine ekler (tekrarı eklenmez).
+    public func addPendingReceived(_ deliveryId: String) {
+        HSStorage.pendingReceivedLock.lock(); defer { HSStorage.pendingReceivedLock.unlock() }
+        var list = pendingReceived
+        guard !list.contains(deliveryId) else { return }
+        list.append(deliveryId)
+        pendingReceived = Array(list.suffix(HSStorage.pendingReceivedMax))
+    }
+
+    /// `received` gönderildi: kimlik bekleyen listeden çıkarılır.
+    public func removePendingReceived(_ deliveryId: String) {
+        HSStorage.pendingReceivedLock.lock(); defer { HSStorage.pendingReceivedLock.unlock() }
+        let list = pendingReceived
+        guard list.contains(deliveryId) else { return }
+        pendingReceived = list.filter { $0 != deliveryId }
+    }
+
+    /// Bekleyen tüm `received` kayıtlarını alır ve listeyi boşaltır.
+    public func takePendingReceived() -> [String] {
+        HSStorage.pendingReceivedLock.lock(); defer { HSStorage.pendingReceivedLock.unlock() }
+        let list = pendingReceived
+        if !list.isEmpty { pendingReceived = [] }
+        return list
+    }
 
     /// E-posta/SMS abonelikleri: kanal (`email`/`sms`) → normalize adres → abonelik kimliği.
     public func contacts(_ channel: String) -> [String: String] {
@@ -52,6 +90,6 @@ public final class HSStorage {
 
     /// Kimlik temizliği; e-posta/SMS abonelikleri önceki kullanıcıda kalır, cihazdaki eşlemeleri silinir.
     public func clearIdentity() {
-        for name in ["user_id", "external_id", "identity_hash", "user_identity_hash", "tags", "contacts_email", "contacts_sms"] { defaults.removeObject(forKey: key(name)) }
+        for name in ["user_id", "external_id", "identity_hash", "user_identity_hash", "tags", "contacts_email", "contacts_sms", "pending_identity_op"] { defaults.removeObject(forKey: key(name)) }
     }
 }

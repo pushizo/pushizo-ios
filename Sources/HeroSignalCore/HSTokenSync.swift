@@ -41,6 +41,8 @@ public enum HSOwnership {
         return ops.map { e in
             var event: [String: Any] = ["name": e["name"] ?? "", "properties": e["properties"] ?? [String: Any](), "occurred_at": e["occurred_at"] ?? "", "subscription_id": subscriptionId]
             if let value = e["value"] { event["value"] = value }
+            // İstemci olay kimliği: yeniden denemede sunucu aynı olayı ikinci kez kaydetmez (eski kuyruk öğelerinde yok).
+            if let eventId = e["event_id"] as? String, !eventId.isEmpty { event["event_id"] = eventId }
             if let proofHash { event["token_hash"] = proofHash }
             if let identityHash { event["identity_hash"] = identityHash }
             return event

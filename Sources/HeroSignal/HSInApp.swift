@@ -4,6 +4,7 @@ import Foundation
 import HeroSignalCore
 #endif
 import UIKit
+import WebKit
 
 /// In-app yaşam döngüsü dinleyicisi; tüm metotlar isteğe bağlıdır (varsayılan gövdeler boştur). Ana iş parçacığında çağrılır.
 public protocol HSInAppLifecycleListener: AnyObject {
@@ -22,6 +23,8 @@ public extension HSInAppLifecycleListener {
 
 /// In-app mesajı çizen katman. Varsayılan: UIWindow üstünde UIKit görünümü ([HSInAppWindowRenderer]).
 /// Özel çizim (ör. Flutter köprüsü) `HeroSignal.InAppMessages.setRenderer` ile kaydedilir. Ana iş parçacığında çağrılır.
+/// HTML içerikli mesajlar (`display.isHtml`) özel çizime verilmez: yalıtım ve köprü doğrulaması (ADR-0027) yalnızca
+/// varsayılan çizimin WKWebView'ında uygulandığından her zaman varsayılan çizimle gösterilir.
 public protocol HSInAppRenderer: AnyObject {
     /// Mesajı gösterir; etkileşimler `handle` ile bildirilir. false → gösterilemedi (mesaj atlanır).
     func show(_ message: HSInAppMessage, handle: HSInAppHandle) -> Bool
@@ -38,6 +41,9 @@ public final class HSInAppHandle {
     private var interacted = false
     private var closing = false
     private var finished = false
+    /// Döngüdeki bir HTML betiği kuyruğu doldurmasın: tek gösterimde en fazla `maxHtmlSideEffects` tag/olay.
+    private var sideEffects = 0
+    private static let maxHtmlSideEffects = 50
 
     init(controller: HSInAppController, message: HSInAppMessage) {
         self.controller = controller
@@ -76,6 +82,38 @@ public final class HSInAppHandle {
         }
     }
 
+    /// HTML köprüsü `click(actionId, url)`: tıklama olayı (`button_id` = actionId), dinleyiciler, adres açma, kapanış.
+    func htmlClicked(_ actionId: String, url: String?) {
+        onMain { [self] in
+            guard !finished, !interacted else { return }
+            interacted = true
+            controller?.onHtmlClicked(self, actionId: actionId, url: url)
+        }
+    }
+
+    /// HTML köprüsü `addTag`; mesaj açık kalır.
+    func htmlAddTag(_ key: String, value: String) {
+        onMain { [self] in
+            guard !finished, allowSideEffect() else { return }
+            HeroSignal.User.addTags([key: value])
+        }
+    }
+
+    /// HTML köprüsü `trackEvent`; mesaj açık kalır.
+    func htmlTrackEvent(_ name: String, properties: [String: HSBridgeValue]) {
+        onMain { [self] in
+            guard !finished, allowSideEffect() else { return }
+            HeroSignal.Session.sendEvent(name, properties: properties.mapValues(\.foundationValue))
+        }
+    }
+
+    private func allowSideEffect() -> Bool {
+        sideEffects += 1
+        if sideEffects <= Self.maxHtmlSideEffects { return true }
+        HSLog.log(.warn, "HTML in-app köprüsü: gösterim başına tag/olay sınırı aşıldı, istek yok sayıldı")
+        return false
+    }
+
     /// willDismiss bir kez; kapatma isteği çizim katmanına iletilir.
     func requestClose() -> Bool {
         guard !closing else { return false }
@@ -98,6 +136,8 @@ final class HSInAppController {
     static let refreshInterval: TimeInterval = 5 * 60
     static let sessionRefreshMinAge: TimeInterval = 30
     static let sessionStartWindow: TimeInterval = 60
+    /// SDK'nın çizebildiği içerik yetenekleri (`GET /in-app?supports=`).
+    static let supports = "html,carousel"
 
     private var messages: [HSInAppMessage] = []
     private var loaded = false
@@ -124,7 +164,10 @@ final class HSInAppController {
 
     func setRenderer(_ renderer: HSInAppRenderer?) { main { [self] in customRenderer = renderer } }
 
-    private var renderer: HSInAppRenderer { customRenderer ?? defaultRenderer }
+    /// HTML mesajı her zaman varsayılan (yalıtılmış WKWebView) çizimle gösterilir; diğerleri varsa özel çizimle.
+    private func renderer(for message: HSInAppMessage) -> HSInAppRenderer {
+        message.display.isHtml ? defaultRenderer : customRenderer ?? defaultRenderer
+    }
 
     private func main(_ block: @escaping () -> Void) {
         if Thread.isMainThread { block() } else { DispatchQueue.main.async(execute: block) }
@@ -235,7 +278,8 @@ final class HSInAppController {
         Task {
             var list: [HSInAppMessage]?
             do {
-                list = HSInAppParser.parseList(try await api.request("GET", "/in-app?\(query)"))
+                // İçerik yetenekleri (ADR-0027): bildirilmezse sunucu HTML mesaj ve carousel göndermez.
+                list = HSInAppParser.parseList(try await api.request("GET", "/in-app?\(query)&supports=\(Self.supports)"))
             } catch {
                 HSLog.log(.warn, "in-app listesi alınamadı: \(error)")
                 if (error as? HSApiError)?.isRetryable != true {
@@ -280,7 +324,7 @@ final class HSInAppController {
         let handle = HSInAppHandle(controller: self, message: message)
         current = handle
         notifyLifecycle { $0.onWillDisplay(message) }
-        if !renderer.show(message, handle: handle) {
+        if !renderer(for: message).show(message, handle: handle) {
             HSLog.log(.warn, "in-app mesajı gösterilemedi")
             if current === handle { current = nil }
         }
@@ -335,6 +379,19 @@ final class HSInAppController {
         close(handle)
     }
 
+    /// HTML köprüsü tıklaması: düğme tıklamasıyla aynı olay ve dinleyiciler; http(s) tarayıcıda, diğer şema deeplink.
+    func onHtmlClicked(_ handle: HSInAppHandle, actionId: String, url: String?) {
+        let message = handle.message
+        markInteracted(message.id)
+        record(message, type: "click", buttonId: actionId)
+        clickListeners.notify(HSInAppClickEvent(messageId: message.id, actionId: actionId, url: url))
+        // Adres köprüde doğrulandı (http(s) veya uygulama şeması); uygulama şeması kayıtlıysa iOS uygulamaya iletir.
+        if let url, let target = URL(string: url) {
+            UIApplication.shared.open(target) { ok in if !ok { HSLog.log(.warn, "in-app adresi açılamadı") } }
+        }
+        close(handle)
+    }
+
     func onDismissed(_ handle: HSInAppHandle) {
         markInteracted(handle.message.id)
         record(handle.message, type: "dismiss", buttonId: nil)
@@ -344,7 +401,7 @@ final class HSInAppController {
     private func close(_ handle: HSInAppHandle) {
         guard handle.requestClose() else { return }
         notifyLifecycle { $0.onWillDismiss(handle.message) }
-        renderer.close(messageId: handle.message.id)
+        renderer(for: handle.message).close(messageId: handle.message.id)
     }
 
     func onClosed(_ handle: HSInAppHandle) {
@@ -376,7 +433,8 @@ extension CharacterSet {
 
 /**
  Varsayılan in-app çizimi: etkin `UIWindowScene` üstünde ayrı bir `UIWindow` (SwiftUI uygulamalarıyla uyumlu).
- Modal/tam ekran dokunuşları yakalar; banner dışındaki dokunuşlar uygulamaya geçer. Görseller gösterimden önce indirilir.
+ Modal/tam ekran dokunuşları yakalar; banner dışındaki dokunuşlar uygulamaya geçer. Görseller (carousel kartlarınınkiler
+ dahil) gösterimden önce indirilir; HTML içerikte gösterim, içerik kural listesinin derlenmesini bekler (`HSHtmlInAppView`).
  */
 final class HSInAppWindowRenderer: HSInAppRenderer {
     private var window: UIWindow?
@@ -389,9 +447,11 @@ final class HSInAppWindowRenderer: HSInAppRenderer {
         active = (message, handle)
         Task {
             let images = await Self.loadImages(message)
+            // Kural listesi derlenemezse nil: mesaj CSP ve gezinme denetimiyle gösterilir.
+            let rules = message.display.isHtml ? await HSHtmlInAppView.ruleList() : nil
             await MainActor.run {
                 guard self.active?.handle === handle else { return }
-                self.attach(message, handle: handle, images: images)
+                self.attach(message, handle: handle, images: images, rules: rules)
             }
         }
         return true
@@ -416,7 +476,7 @@ final class HSInAppWindowRenderer: HSInAppRenderer {
         handle.closed()
     }
 
-    private func attach(_ message: HSInAppMessage, handle: HSInAppHandle, images: [String: UIImage]) {
+    private func attach(_ message: HSInAppMessage, handle: HSInAppHandle, images: [String: UIImage], rules: WKContentRuleList?) {
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }) else {
@@ -425,7 +485,7 @@ final class HSInAppWindowRenderer: HSInAppRenderer {
                 guard let self, self.active?.handle === handle, self.window == nil else { return }
                 if let observer = self.activationObserver { NotificationCenter.default.removeObserver(observer) }
                 self.activationObserver = nil
-                self.attach(message, handle: handle, images: images)
+                self.attach(message, handle: handle, images: images, rules: rules)
             }
             return
         }
@@ -434,7 +494,7 @@ final class HSInAppWindowRenderer: HSInAppRenderer {
         window.passthrough = banner
         window.windowLevel = .alert + 1
         window.backgroundColor = .clear
-        let vc = HSInAppViewController(message: message, images: images, handle: handle)
+        let vc = HSInAppViewController(message: message, images: images, handle: handle, rules: rules)
         window.rootViewController = vc
         self.window = window
         window.isHidden = false
@@ -451,8 +511,12 @@ final class HSInAppWindowRenderer: HSInAppRenderer {
 
     /// Görselleri paralel indirir (10 sn zaman aşımı); başarısız görsel atlanır.
     static func loadImages(_ message: HSInAppMessage) async -> [String: UIImage] {
-        let urls = Set(message.display.blocks.compactMap { block -> String? in
-            if case let .image(url, _) = block { return url } else { return nil }
+        let urls = Set(message.display.blocks.flatMap { block -> [String] in
+            switch block {
+            case let .image(url, _): return [url]
+            case let .carousel(c): return c.cards.compactMap(\.imageUrl)
+            default: return []
+            }
         })
         var result: [String: UIImage] = [:]
         await withTaskGroup(of: (String, UIImage?).self) { group in
@@ -483,23 +547,31 @@ final class HSPassthroughWindow: UIWindow {
     }
 }
 
-/// In-app mesaj görünümü (yerel UIKit bileşenleri; ham HTML yok).
+/// In-app mesaj görünümü: yerel UIKit bileşenleri veya HTML içerikte yalıtılmış WKWebView (`HSHtmlInAppView`).
 final class HSInAppViewController: UIViewController {
     private let message: HSInAppMessage
     private let images: [String: UIImage]
     private let handle: HSInAppHandle
+    private let rules: WKContentRuleList?
     private let card = UIView()
     private let scrim = UIView()
+    private var web: HSHtmlInAppView?
+    private var webHeight: NSLayoutConstraint?
     private(set) var accessibilityFocus: Any?
+
+    /// `html_height` verilmediğinde ilk yükseklik (pt); köprünün `resize` bildirimiyle güncellenir.
+    private static let defaultBannerHtmlHeight: CGFloat = 120
+    private static let defaultModalHtmlHeight: CGFloat = 360
 
     private var display: HSInAppDisplay { message.display }
     private var banner: Bool { display.layout == .bannerTop || display.layout == .bannerBottom }
     private var fullscreen: Bool { display.layout == .fullscreen }
 
-    init(message: HSInAppMessage, images: [String: UIImage], handle: HSInAppHandle) {
+    init(message: HSInAppMessage, images: [String: UIImage], handle: HSInAppHandle, rules: WKContentRuleList?) {
         self.message = message
         self.images = images
         self.handle = handle
+        self.rules = rules
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -589,43 +661,50 @@ final class HSInAppViewController: UIViewController {
                 stack.addArrangedSubview(makeLabel(text, style: banner ? .subheadline : .body, bold: false, color: textColor))
             case let .button(b):
                 stack.addArrangedSubview(makeButton(b))
+            case let .carousel(c):
+                stack.addArrangedSubview(HSCarouselView(carousel: c, images: images, textColor: textColor, background: background,
+                                                        banner: banner, makeButton: { [unowned self] in self.makeButton($0) }))
             }
         }
 
-        let scroll = UIScrollView()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.alwaysBounceVertical = false
-        scroll.addSubview(stack)
-        card.addSubview(scroll)
-        NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: fullscreen ? card.safeAreaLayoutGuide.topAnchor : card.topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: fullscreen ? card.safeAreaLayoutGuide.bottomAnchor : card.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-            stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: inset),
-            stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -inset),
-        ])
-        // İçerik kısa ise kart içeriğe göre boyutlanır; uzunsa kaydırılır.
-        let fit = scroll.heightAnchor.constraint(equalTo: scroll.contentLayoutGuide.heightAnchor)
-        fit.priority = .defaultLow
-        fit.isActive = true
-        let content = scroll.contentLayoutGuide
-        if fullscreen {
-            // Tam ekranda içerik dikeyde ortalanır; uzunsa kaydırılır.
-            NSLayoutConstraint.activate([
-                stack.topAnchor.constraint(greaterThanOrEqualTo: content.topAnchor, constant: topInset),
-                stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -inset),
-                stack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-                content.heightAnchor.constraint(greaterThanOrEqualTo: scroll.frameLayoutGuide.heightAnchor),
-            ])
-            let tight = content.heightAnchor.constraint(equalTo: stack.heightAnchor, constant: topInset + inset)
-            tight.priority = .defaultLow
-            tight.isActive = true
+        if display.isHtml {
+            embedHtml()
         } else {
+            let scroll = UIScrollView()
+            scroll.translatesAutoresizingMaskIntoConstraints = false
+            scroll.alwaysBounceVertical = false
+            scroll.addSubview(stack)
+            card.addSubview(scroll)
             NSLayoutConstraint.activate([
-                stack.topAnchor.constraint(equalTo: content.topAnchor, constant: topInset),
-                stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -inset),
+                scroll.topAnchor.constraint(equalTo: fullscreen ? card.safeAreaLayoutGuide.topAnchor : card.topAnchor),
+                scroll.bottomAnchor.constraint(equalTo: fullscreen ? card.safeAreaLayoutGuide.bottomAnchor : card.bottomAnchor),
+                scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+                scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+                stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: inset),
+                stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -inset),
             ])
+            // İçerik kısa ise kart içeriğe göre boyutlanır; uzunsa kaydırılır.
+            let fit = scroll.heightAnchor.constraint(equalTo: scroll.contentLayoutGuide.heightAnchor)
+            fit.priority = .defaultLow
+            fit.isActive = true
+            let content = scroll.contentLayoutGuide
+            if fullscreen {
+                // Tam ekranda içerik dikeyde ortalanır; uzunsa kaydırılır.
+                NSLayoutConstraint.activate([
+                    stack.topAnchor.constraint(greaterThanOrEqualTo: content.topAnchor, constant: topInset),
+                    stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -inset),
+                    stack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+                    content.heightAnchor.constraint(greaterThanOrEqualTo: scroll.frameLayoutGuide.heightAnchor),
+                ])
+                let tight = content.heightAnchor.constraint(equalTo: stack.heightAnchor, constant: topInset + inset)
+                tight.priority = .defaultLow
+                tight.isActive = true
+            } else {
+                NSLayoutConstraint.activate([
+                    stack.topAnchor.constraint(equalTo: content.topAnchor, constant: topInset),
+                    stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -inset),
+                ])
+            }
         }
 
         if showClose {
@@ -654,7 +733,8 @@ final class HSInAppViewController: UIViewController {
             NSLayoutConstraint.activate([
                 card.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 12),
                 card.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -12),
-                card.heightAnchor.constraint(lessThanOrEqualTo: guide.heightAnchor, multiplier: 0.5),
+                // HTML banner yüksekliğini köprü belirler (üst sınır ekranın %90'ı); yerel banner en fazla yarım ekran.
+                card.heightAnchor.constraint(lessThanOrEqualTo: guide.heightAnchor, multiplier: display.isHtml ? 0.9 : 0.5),
                 display.layout == .bannerTop
                     ? card.topAnchor.constraint(equalTo: guide.topAnchor, constant: 8)
                     : card.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -8),
@@ -671,6 +751,53 @@ final class HSInAppViewController: UIViewController {
             ])
         }
         if accessibilityFocus == nil { accessibilityFocus = card }
+    }
+
+    /// HTML içerik: kartı dolduran WKWebView. Banner/modal yüksekliği `html_height` ile başlar, `resize` ile güncellenir
+    /// (üst sınır ekranın %90'ı); tam ekranda WebView kartın güvenli alanını doldurur.
+    private func embedHtml() {
+        let htmlView = HSHtmlInAppView(html: display.html ?? "", language: message.language, rules: rules) { [weak self] action in
+            self?.handleBridge(action)
+        }
+        web = htmlView
+        let webView = htmlView.webView
+        card.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: fullscreen ? card.safeAreaLayoutGuide.topAnchor : card.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: fullscreen ? card.safeAreaLayoutGuide.bottomAnchor : card.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+        ])
+        if !fullscreen {
+            let initial = display.htmlHeight.map { CGFloat($0) } ?? (banner ? Self.defaultBannerHtmlHeight : Self.defaultModalHtmlHeight)
+            let height = webView.heightAnchor.constraint(equalToConstant: initial)
+            // Kart sınırları (ekranın %90'ı) istenen yükseklikten önce gelir.
+            height.priority = .defaultHigh
+            height.isActive = true
+            webView.heightAnchor.constraint(lessThanOrEqualTo: view.heightAnchor, multiplier: 0.9).isActive = true
+            webHeight = height
+        }
+        accessibilityFocus = webView
+        htmlView.load()
+    }
+
+    private func handleBridge(_ action: HSHtmlBridgeAction) {
+        switch action {
+        case .ready:
+            break
+        case .close:
+            handle.dismissed()
+        case let .click(actionId, url):
+            handle.htmlClicked(actionId, url: url)
+        case let .addTag(key, value):
+            handle.htmlAddTag(key, value: value)
+        case let .trackEvent(name, props):
+            handle.htmlTrackEvent(name, properties: props)
+        case let .resize(height):
+            guard let webHeight, webHeight.constant != CGFloat(height) else { return }
+            webHeight.constant = CGFloat(height)
+            view.layoutIfNeeded()
+        }
     }
 
     private func makeLabel(_ text: String, style: UIFont.TextStyle, bold: Bool, color: UIColor) -> UILabel {
@@ -744,7 +871,10 @@ final class HSInAppViewController: UIViewController {
             self.card.transform = self.offscreenTransform
             self.card.alpha = 0
             self.scrim.alpha = 0
-        }, completion: { _ in completion() })
+        }, completion: { [weak self] _ in
+            self?.web?.destroy()
+            completion()
+        })
     }
 
     static var closeLabel: String {

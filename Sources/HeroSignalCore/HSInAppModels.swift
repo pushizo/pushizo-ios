@@ -45,12 +45,35 @@ public struct HSInAppButton: Equatable {
     public let textColor: String?
 }
 
+/// Carousel kartı; `button` geçersiz aksiyonlu ise nil (kart yine gösterilir).
+public struct HSInAppCarouselCard: Equatable {
+    public let id: String
+    public let title: String
+    public let body: String?
+    public let imageUrl: String?
+    public let imageAlt: String?
+    public let button: HSInAppButton?
+}
+
+/// Yatay kaydırmalı kartlar (v2 Faz 18); kart düğmeleri `HSInAppDisplay.buttons` içinde yer alır.
+public struct HSInAppCarousel: Equatable {
+    public let id: String
+    public let cards: [HSInAppCarouselCard]
+}
+
 /// Mesaj içerik bloğu; metinler sunucuda kullanıcının dilinde çözülmüş düz dizedir.
 public enum HSInAppBlock: Equatable {
     case image(url: String, alt: String?)
     case title(String)
     case body(String)
     case button(HSInAppButton)
+    case carousel(HSInAppCarousel)
+}
+
+/// Mesaj içeriğinin biçimi: yerel bloklar veya yalıtılmış WKWebView'da çizilen HTML (ADR-0027).
+public enum HSInAppContentType: String, Equatable {
+    case blocks
+    case html
 }
 
 public enum HSInAppLayout: String, Equatable {
@@ -67,10 +90,25 @@ public struct HSInAppDisplay: Equatable {
     public let dismissible: Bool
     public let autoDismissSeconds: Int?
     public let blocks: [HSInAppBlock]
+    /// `.html` ise `blocks` boştur ve içerik `html` alanındadır.
+    public let contentType: HSInAppContentType
+    /// Kullanıcının dilinde, kişiselleştirilmiş HTML (yalnızca HTML içerikte).
+    public let html: String?
+    /// Banner/modal için ilk yükseklik (CSS px ≙ pt); köprünün `resize` bildirimiyle güncellenir.
+    public let htmlHeight: Int?
 
+    /// Düğme blokları ve carousel kartlarının düğmeleri (tıklama bildirimi bu listeden çözülür).
     public var buttons: [HSInAppButton] {
-        blocks.compactMap { if case let .button(b) = $0 { return b } else { return nil } }
+        blocks.flatMap { block -> [HSInAppButton] in
+            switch block {
+            case let .button(b): return [b]
+            case let .carousel(c): return c.cards.compactMap(\.button)
+            default: return []
+            }
+        }
     }
+
+    public var isHtml: Bool { contentType == .html }
 }
 
 /// Sunucunun cihaz için döndürdüğü gösterilebilir in-app mesaj. `triggerGroups` VEYA ile bağlı gruplardır (grup içi VE);
@@ -91,6 +129,8 @@ public struct HSInAppMessage: Equatable {
     public let endAt: Date?
     /// Sunucudaki ham JSON (özel çizim katmanları, ör. Flutter köprüsü için).
     public let raw: NSDictionary
+    /// Sunucunun içeriği çözdüğü dil (liste yanıtındaki `language`); HTML belgesinin `lang` özniteliği.
+    public let language: String?
 }
 
 /// In-app mesaj tıklaması: `actionId` düğme kimliği; `url` url/deeplink aksiyonunun adresi.
@@ -103,12 +143,18 @@ public struct HSInAppClickEvent: Equatable {
 /// `GET /in-app` yanıt ayrıştırıcı; bozuk mesaj atlanır, diğerleri kullanılır.
 public enum HSInAppParser {
     public static func parseList(_ json: [String: Any]) -> [HSInAppMessage] {
-        (json["data"] as? [[String: Any]] ?? []).compactMap(parseMessage)
+        let language = nonEmpty(json["language"])
+        return (json["data"] as? [[String: Any]] ?? []).compactMap { parseMessage($0, language: language) }
     }
 
-    public static func parseMessage(_ item: [String: Any]) -> HSInAppMessage? {
+    public static func parseMessage(_ item: [String: Any], language: String? = nil) -> HSInAppMessage? {
         guard let id = item["id"] as? String, let display = item["display"] as? [String: Any] else { return nil }
         let groups = parseTriggerGroups(item["trigger_groups"] as? [[[String: Any]]], triggers: item["triggers"] as? [[String: Any]] ?? [])
+        // Alan yoksa veya tanınmıyorsa bloklar (eski sunucu uyumu); içeriksiz HTML mesajı atlanır.
+        let contentType: HSInAppContentType = (display["content_type"] as? String) == "html" ? .html : .blocks
+        let html = nonEmpty(display["html"])
+        if contentType == .html, html?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true { return nil }
+        let htmlHeight = contentType == .html ? (display["html_height"] as? NSNumber).map(\.intValue).flatMap { $0 > 0 ? $0 : nil } : nil
         return HSInAppMessage(
             id: id,
             priority: (item["priority"] as? NSNumber)?.intValue ?? 0,
@@ -121,14 +167,18 @@ public enum HSInAppParser {
                 textColor: nonEmpty(display["text_color"]),
                 dismissible: (display["dismissible"] as? Bool) ?? true,
                 autoDismissSeconds: (display["auto_dismiss_seconds"] as? NSNumber).map(\.intValue).flatMap { $0 > 0 ? $0 : nil },
-                blocks: (display["blocks"] as? [[String: Any]] ?? []).compactMap(parseBlock)
+                blocks: contentType == .html ? [] : (display["blocks"] as? [[String: Any]] ?? []).compactMap(parseBlock),
+                contentType: contentType,
+                html: contentType == .html ? html : nil,
+                htmlHeight: htmlHeight
             ),
             remainingImpressions: (item["remaining_impressions"] as? NSNumber)?.intValue ?? 1,
             minIntervalSeconds: (item["min_interval_seconds"] as? NSNumber)?.intValue ?? 0,
             stopAfterInteraction: item["stop_after_interaction"] as? Bool ?? false,
             lastImpressionAt: nonEmpty(item["last_impression_at"]).flatMap(HSIsoTime.parse),
             endAt: nonEmpty(item["end_at"]).flatMap(HSIsoTime.parse),
-            raw: item as NSDictionary
+            raw: item as NSDictionary,
+            language: language
         )
     }
 
@@ -173,10 +223,28 @@ public enum HSInAppParser {
             guard let id = b["id"] as? String, let action = parseAction(b["action"] as? [String: Any]) else { return nil }
             return .button(HSInAppButton(id: id, text: b["text"] as? String ?? "", action: action,
                                          backgroundColor: nonEmpty(b["background_color"]), textColor: nonEmpty(b["text_color"])))
+        case "carousel":
+            return parseCarousel(b).map(HSInAppBlock.carousel)
         default:
             // Tanınmayan blok türü atlanır (ileri uyumluluk).
             return nil
         }
+    }
+
+    /// Kimliksiz veya kartsız carousel atlanır; kimliksiz kart atlanır, geçersiz kart düğmesi yalnızca düğmeyi düşürür.
+    private static func parseCarousel(_ b: [String: Any]) -> HSInAppCarousel? {
+        guard let id = nonEmpty(b["id"]), let items = b["cards"] as? [[String: Any]] else { return nil }
+        let cards = items.compactMap { c -> HSInAppCarouselCard? in
+            guard let cardId = nonEmpty(c["id"]) else { return nil }
+            var button: HSInAppButton?
+            if let btn = c["button"] as? [String: Any], let buttonId = nonEmpty(btn["id"]),
+               let action = parseAction(btn["action"] as? [String: Any]) {
+                button = HSInAppButton(id: buttonId, text: btn["text"] as? String ?? "", action: action, backgroundColor: nil, textColor: nil)
+            }
+            return HSInAppCarouselCard(id: cardId, title: c["title"] as? String ?? "", body: nonEmpty(c["body"]),
+                                       imageUrl: nonEmpty(c["image_url"]), imageAlt: nonEmpty(c["image_alt"]), button: button)
+        }
+        return cards.isEmpty ? nil : HSInAppCarousel(id: id, cards: cards)
     }
 
     private static func parseAction(_ a: [String: Any]?) -> HSInAppAction? {

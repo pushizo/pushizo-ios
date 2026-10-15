@@ -23,7 +23,8 @@ Pod::Spec.new do |s|
     app.dependency 'HeroSignal/Core'
     app.source_files = 'Sources/HeroSignal/**/*.swift'
     # CoreLocation: yalnızca ön planda konum paylaşımı (`HeroSignal.Location`, v2 Faz 17b).
-    app.frameworks = 'UIKit', 'UserNotifications', 'CoreLocation'
+    # WebKit: HTML in-app mesajlarının yalıtılmış WKWebView çizimi (v2 Faz 18, ADR-0027).
+    app.frameworks = 'UIKit', 'UserNotifications', 'CoreLocation', 'WebKit'
   end
 
   s.subspec 'Extension' do |ext|

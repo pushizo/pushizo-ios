@@ -121,6 +121,8 @@ public enum HeroSignal {
     static var errorReporter: HSErrorReporter?
     static var errorFlushScheduled = false
     static var identityVerificationRequired = false
+    /// `/config` `identity_verification_mode` (ADR-0023 §9); alan yoksa `hmac`.
+    static var identityVerificationMode: HSIdentityVerificationMode = .hmac
     static var sessionTracker: HSSessionTracker?
     /// Arka planda oturum penceresi (30 sn) dolunca oturumu kapatan zamanlayıcı; ön plana dönüşte iptal edilir.
     static var sessionExpiryWork: DispatchWorkItem?
@@ -147,7 +149,10 @@ public enum HeroSignal {
         HSLog.level = opts.logLevel
         let store = HSStorage(appId: appId, appGroup: opts.appGroup)
         storage = store
-        api = HSApi(apiUrl: opts.apiUrl, appId: appId, sdkVersion: sdkVersion)
+        let client = HSApi(apiUrl: opts.apiUrl, appId: appId, sdkVersion: sdkVersion)
+        // Kimlik JWT'si her istekte depodan okunur (login/updateUserJwt/logout sonrası güncel değer).
+        client.identityToken = { [weak store] in store?.identityJwt }
+        api = client
         queue = HSQueue(defaults: store.defaults, appId: appId)
         sessionTracker = HSSessionTracker(defaults: store.defaults, appId: appId)
         // NSE `received` göndermeden önce onay zorunluluğunu paylaşılan depodan okur.
@@ -233,6 +238,7 @@ public enum HeroSignal {
     /// `/config` yanıtı: kimlik doğrulama zorunluluğu ve app geneli in-app aralığı (kalıcı; ADR-0019 §7).
     static func applyConfig(_ config: [String: Any]) async {
         identityVerificationRequired = config["identity_verification_required"] as? Bool ?? false
+        identityVerificationMode = HSIdentityVerificationMode(config: config["identity_verification_mode"])
         let interval = max(((config["in_app"] as? [String: Any])?["min_interval_seconds"] as? NSNumber)?.intValue ?? 0, 0)
         storage?.inAppMinIntervalSeconds = interval
         await MainActor.run { inApp.globalMinIntervalSeconds = interval }
@@ -526,6 +532,16 @@ public enum HeroSignal {
             if let variant = op["variant_id"] as? String, !variant.isEmpty { body["variant_id"] = variant }
             let path = messageId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? messageId
             try await api.request("POST", "/in-app/\(path)/events", body: body)
+        case HSLiveActivities.tokenOperationType, HSLiveActivities.deleteOperationType:
+            // Live Activity belirteçleri push aboneliğine bağlanır; abonelik oluşana kadar kuyrukta bekler (ADR-0024 §4).
+            guard let subId = store.subscriptionId else { throw HSQueueDeferred("push aboneliği yok") }
+            guard let request = HSLiveActivities.request(
+                for: op,
+                subscriptionId: subId,
+                registeredToken: store.registeredToken,
+                identityHash: store.externalId != nil ? store.userIdentityHash : nil
+            ) else { return }
+            try await api.request("POST", request.path, body: request.body)
         case "received":
             try await api.request("POST", "/deliveries/\(op["delivery_id"] ?? "")/received", body: [:])
         case "dismissed":
@@ -687,11 +703,18 @@ public enum HeroSignal {
 
     // MARK: - Public API
 
-    public static func login(_ externalId: String, identityHash: String? = nil) {
+    /**
+     Kullanıcıyı kimliklendirir. Kimlik kanıtı app ayarına göre HMAC `identityHash` ve/veya sunucunuzda imzalanmış
+     ES256 `jwt`'dir (ADR-0023 §9; `sub` = externalId, `aud` = appId). JWT tüm SDK isteklerinde `Authorization: Bearer`
+     başlığıyla gider; süresi dolunca `updateUserJwt(_:)` ile yenilenir.
+     */
+    public static func login(_ externalId: String, identityHash: String? = nil, jwt: String? = nil) {
         guard let store = storage, api != nil else { return }
-        if identityVerificationRequired && identityHash == nil {
-            HSLog.log(.error, "Bu app için identityHash zorunlu"); return
+        if let message = loginProofError(identityHash: identityHash, jwt: jwt) {
+            HSLog.log(.error, message); return
         }
+        // JWT bu girişin isteğinde de başlıkta gitmelidir: istekten önce saklanır.
+        store.identityJwt = (jwt ?? "").isEmpty ? nil : jwt
         guard networkAllowed else {
             // Onay bekleniyor: kimlik yerelde tutulur, onay verilince `start()` sunucuya bağlar.
             store.externalId = externalId
@@ -746,6 +769,24 @@ public enum HeroSignal {
             return
         }
         Task { await performLogout() }
+    }
+
+    /// Verilen kanıt app'in kimlik doğrulama kipine (`/config`) uymuyorsa hata mesajı; uyuyorsa nil. `login` bu durumda
+    /// isteği göndermez; çapraz platform köprüleri çağrıyı reddetmek için kullanır.
+    public static func loginProofError(identityHash: String?, jwt: String?) -> String? {
+        HSIdentityVerification.loginError(required: identityVerificationRequired, mode: identityVerificationMode, identityHash: identityHash, jwt: jwt)
+    }
+
+    /**
+     Süresi dolan veya yenilenen kimlik JWT'sini günceller. Sonraki SDK istekleri yeni belirteci taşır; kuyrukta bekleyen
+     işlemler yeniden denenir. Giriş yapılmamışsa `HSError.noUser`, belirteç boşsa `HSError.invalidArgument`.
+     */
+    public static func updateUserJwt(_ jwt: String) throws {
+        guard let store = storage, api != nil else { throw HSError.notInitialized }
+        guard !jwt.isEmpty else { throw HSError.invalidArgument("jwt gerekli") }
+        guard store.externalId != nil else { throw HSError.noUser }
+        store.identityJwt = jwt
+        Task { await flushQueue() }
     }
 
     static func performLogout() async {

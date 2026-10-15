@@ -13,6 +13,8 @@ Pod::Spec.new do |s|
   s.subspec 'Core' do |core|
     core.source_files = 'Sources/HeroSignalCore/**/*.swift'
     core.frameworks = 'UserNotifications'
+    # Live Activities (iOS 16.1+): iOS 15 hedefinde yüklenebilmesi için zayıf bağlanır.
+    core.weak_frameworks = 'ActivityKit'
   end
 
   s.subspec 'App' do |app|

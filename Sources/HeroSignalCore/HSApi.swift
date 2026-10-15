@@ -22,6 +22,9 @@ public final class HSApi {
     public let sdkVersion: String
     private let session: URLSession
     private let backoff: [UInt64] = [500, 1_500, 4_000]
+    /// Kimlik JWT'si sağlayıcısı (ADR-0023 §9). Değer varsa her istekte `Authorization: Bearer` başlığıyla gider;
+    /// gövdeye/URL'ye yazılmaz ve loglanmaz. Her istekte yeniden okunur: `updateUserJwt` sonrası denemeler yeni belirteci taşır.
+    public var identityToken: (() -> String?)?
 
     public init(apiUrl: String, appId: String, sdkVersion: String, session: URLSession = .shared) {
         self.apiUrl = apiUrl.hasSuffix("/") ? String(apiUrl.dropLast()) : apiUrl
@@ -42,6 +45,9 @@ public final class HSApi {
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("herosignal-ios/\(sdkVersion)", forHTTPHeaderField: "User-Agent")
+        if let jwt = identityToken?(), !jwt.isEmpty {
+            request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+        }
         if let body {
             request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: body)

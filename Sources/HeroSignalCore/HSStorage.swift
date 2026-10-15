@@ -18,6 +18,8 @@ public final class HSStorage {
     public var pendingIdentityHash: String? { get { defaults.string(forKey: key("identity_hash")) } set { defaults.set(newValue, forKey: key("identity_hash")) } }
     /// Login'de verilen kimlik doğrulama hash'i; kullanıcı çağrılarına (tag, alias) eklenir, logout ile silinir.
     public var userIdentityHash: String? { get { defaults.string(forKey: key("user_identity_hash")) } set { defaults.set(newValue, forKey: key("user_identity_hash")) } }
+    /// Login'de veya `updateUserJwt` ile verilen kimlik JWT'si (ADR-0023 §9); `Authorization` başlığına eklenir, logout ile silinir.
+    public var identityJwt: String? { get { defaults.string(forKey: key("identity_jwt")) } set { defaults.set(newValue, forKey: key("identity_jwt")) } }
     public var deviceToken: String? { get { defaults.string(forKey: key("device_token")) } set { defaults.set(newValue, forKey: key("device_token")) } }
     public var registeredToken: String? { get { defaults.string(forKey: key("registered_token")) } set { defaults.set(newValue, forKey: key("registered_token")) } }
     public var optedIn: Bool { get { defaults.object(forKey: key("opted_in")) as? Bool ?? true } set { defaults.set(newValue, forKey: key("opted_in")) } }
@@ -90,6 +92,6 @@ public final class HSStorage {
 
     /// Kimlik temizliği; e-posta/SMS abonelikleri önceki kullanıcıda kalır, cihazdaki eşlemeleri silinir.
     public func clearIdentity() {
-        for name in ["user_id", "external_id", "identity_hash", "user_identity_hash", "tags", "contacts_email", "contacts_sms", "pending_identity_op"] { defaults.removeObject(forKey: key(name)) }
+        for name in ["user_id", "external_id", "identity_hash", "user_identity_hash", "identity_jwt", "tags", "contacts_email", "contacts_sms", "pending_identity_op"] { defaults.removeObject(forKey: key(name)) }
     }
 }

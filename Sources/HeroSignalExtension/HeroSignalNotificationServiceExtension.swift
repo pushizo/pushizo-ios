@@ -1,7 +1,8 @@
 import Foundation
-// SPM: ayrı modül; CocoaPods alt spec'leri tek "HeroSignal" modülünde derlenir.
+// SPM: ayrı modül; CocoaPods alt spec'leri tek "HeroSignal" modülünde derlenir. Çekirdek tipler yeniden dışa aktarılır:
+// widget extension `import HeroSignalExtension` ile Live Activity tiplerine (`HeroSignalActivityData` vb.) erişir.
 #if canImport(HeroSignalCore)
-import HeroSignalCore
+@_exported import HeroSignalCore
 #endif
 import UserNotifications
 
@@ -39,8 +40,12 @@ public final class HeroSignalNotificationServiceExtension {
     private var content: UNMutableNotificationContent?
 
     public init(appId: String, apiUrl: String, appGroup: String? = nil, requiresPrivacyConsent: Bool = false) {
-        self.api = HSApi(apiUrl: apiUrl, appId: appId, sdkVersion: "0.1.0")
-        self.storage = HSStorage(appId: appId, appGroup: appGroup)
+        let storage = HSStorage(appId: appId, appGroup: appGroup)
+        let api = HSApi(apiUrl: apiUrl, appId: appId, sdkVersion: "0.1.0")
+        // Uygulamanın App Group'a yazdığı kimlik JWT'si NSE isteklerinde de `Authorization` başlığıyla gider (ADR-0023 §9).
+        api.identityToken = { [weak storage] in storage?.identityJwt }
+        self.api = api
+        self.storage = storage
         self.badges = HSBadgeStore(appGroup: HSAppGroup.resolve(appGroup))
         self.requiresPrivacyConsent = requiresPrivacyConsent
     }

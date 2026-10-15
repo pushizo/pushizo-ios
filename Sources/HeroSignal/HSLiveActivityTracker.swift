@@ -19,10 +19,16 @@ extension HeroSignal {
      ```
 
      Tür adı Swift tip adıdır (`String(describing: T.self)`) ve dashboard/API'de aynı adla tanımlanmalıdır.
+
+     Mac Catalyst: Live Activities Mac'te gösterilmez. `register`/`startTracking` derlenir ama etkisizdir (uyarı yazılır);
+     `setupDefaultLiveActivity`/`startDefaultLiveActivity` `HSLiveActivityError.notSupported` (`PLATFORM_NOT_SUPPORTED`) fırlatır.
      */
     public enum LiveActivities {
         /// Çapraz platform köprülerinin kullandığı genel tür adı (sunucuda bu adla tanımlanır).
         public static var defaultActivityType: String { HeroSignalDefaultLiveActivityAttributes.activityType }
+
+        /// Mac Catalyst'te `PLATFORM_NOT_SUPPORTED` hatasının mesajı.
+        static let catalystUnsupportedMessage = "Live Activities Mac Catalyst'te desteklenmez"
 
         #if canImport(ActivityKit) && os(iOS)
         /**
@@ -36,7 +42,11 @@ extension HeroSignal {
                 HSLog.log(.error, "LiveActivities.register: önce HeroSignal.initialize çağrılmalı")
                 return
             }
+            #if targetEnvironment(macCatalyst)
+            HSLog.log(.warn, "\(catalystUnsupportedMessage); LiveActivities.register etkisiz")
+            #else
             HSLiveActivityTracker.shared.register(type)
+            #endif
         }
 
         /**
@@ -54,7 +64,11 @@ extension HeroSignal {
                 HSLog.log(.error, "geçersiz activityId: 1-100 karakter; harf, rakam ve _ . : -")
                 return
             }
+            #if targetEnvironment(macCatalyst)
+            HSLog.log(.warn, "\(catalystUnsupportedMessage); LiveActivities.startTracking etkisiz")
+            #else
             HSLiveActivityTracker.shared.track(activity, activityType: String(describing: T.self), activityId: activityId)
+            #endif
         }
         #endif
 
@@ -62,9 +76,13 @@ extension HeroSignal {
          Genel türü (`HeroSignalDefaultLiveActivityAttributes`) `register` eder; köprüler `setupDefaultLiveActivity()` ile
          çağırır. iOS 16.1 öncesinde `HSLiveActivityError.notSupported`, başlatılmamış SDK'da `.notInitialized` fırlatır.
          Widget extension'da `ActivityConfiguration(for: HeroSignalDefaultLiveActivityAttributes.self)` tanımlanmalıdır.
+         Mac Catalyst'te her zaman `.notSupported` (`PLATFORM_NOT_SUPPORTED`).
          */
         public static func setupDefaultLiveActivity() throws {
             guard isInitialized else { throw HSLiveActivityError.notInitialized }
+            #if targetEnvironment(macCatalyst)
+            throw HSLiveActivityError.notSupported(catalystUnsupportedMessage)
+            #else
             #if canImport(ActivityKit) && os(iOS)
             if #available(iOS 16.1, *) {
                 HSLiveActivityTracker.shared.register(HeroSignalDefaultLiveActivityAttributes.self)
@@ -72,6 +90,7 @@ extension HeroSignal {
             }
             #endif
             throw HSLiveActivityError.notSupported("Live Activities iOS 16.1 veya üstünü gerektirir")
+            #endif
         }
 
         /**
@@ -92,6 +111,10 @@ extension HeroSignal {
                   let stateValues = HeroSignalLiveActivityValue.dictionary(from: contentState) else {
                 throw HSLiveActivityError.invalidArgument("attributes/contentState değerleri metin, sayı veya mantıksal olmalı (anahtar 1-64 karakter)")
             }
+            #if targetEnvironment(macCatalyst)
+            _ = (attributeValues, stateValues)
+            throw HSLiveActivityError.notSupported(catalystUnsupportedMessage)
+            #else
             #if canImport(ActivityKit) && os(iOS)
             if #available(iOS 16.1, *) {
                 try HSLiveActivityTracker.shared.startDefault(activityId: activityId, attributes: attributeValues, contentState: stateValues)
@@ -99,11 +122,13 @@ extension HeroSignal {
             }
             #endif
             throw HSLiveActivityError.notSupported("Live Activities iOS 16.1 veya üstünü gerektirir")
+            #endif
         }
     }
 }
 
-#if canImport(ActivityKit) && os(iOS)
+// Mac Catalyst'te ActivityKit derlenebilse de etkinlikler gösterilmez: izleyici yalnızca iOS/iPadOS'ta derlenir.
+#if canImport(ActivityKit) && os(iOS) && !targetEnvironment(macCatalyst)
 /**
  ActivityKit akışlarını dinler ve belirteç işlemlerini kalıcı kuyruğa yazar. Aynı belirteç (tür × tür/etkinlik anahtarı)
  süreç ömrü boyunca bir kez gönderilir; her etkinlik `Activity.id` başına tek görevle izlenir.

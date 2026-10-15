@@ -91,10 +91,10 @@ public enum HSOwnership {
 /// Kayıt ve izin PATCH'lerindeki `device` nesnesi.
 public enum HSDeviceInfo {
     /// Bilinmeyen değerler (ör. `app_version`) JSON null yerine hiç gönderilmez.
-    public static func make(model: String, osVersion: String, appVersion: String?, sdkVersion: String, locale: String, timezone: String, pushCapable: Bool, pushEnvironment: String) -> [String: Any] {
+    public static func make(model: String, os: String = "iOS", osVersion: String, appVersion: String?, sdkVersion: String, locale: String, timezone: String, pushCapable: Bool, pushEnvironment: String) -> [String: Any] {
         var info: [String: Any] = [
             "model": model,
-            "os": "iOS",
+            "os": os,
             "os_version": osVersion,
             "sdk_version": sdkVersion,
             "sdk_platform": "ios",

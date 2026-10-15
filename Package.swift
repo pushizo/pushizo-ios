@@ -3,7 +3,8 @@ import PackageDescription
 
 let package = Package(
     name: "HeroSignalFramework",
-    platforms: [.iOS(.v15)],
+    // Mac Catalyst: iOS hedefiyle aynı asgari sürüm (iOS 15 ≙ Catalyst 15). Live Activities Catalyst'te `PLATFORM_NOT_SUPPORTED`.
+    platforms: [.iOS(.v15), .macCatalyst(.v15)],
     products: [
         .library(name: "HeroSignal", targets: ["HeroSignal"]),
         .library(name: "HeroSignalExtension", targets: ["HeroSignalExtension"]),

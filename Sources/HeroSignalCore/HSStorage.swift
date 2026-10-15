@@ -33,6 +33,13 @@ public final class HSStorage {
     /// Sunucudaki aboneliğe en son yazılan `device.push_capable`; güncel izinden farklıysa yeniden PATCH edilir.
     public var syncedPushCapable: Bool? { get { defaults.object(forKey: key("synced_push_capable")) as? Bool } set { defaults.set(newValue, forKey: key("synced_push_capable")) } }
     public var tags: [String: String] { get { defaults.dictionary(forKey: key("tags")) as? [String: String] ?? [:] } set { defaults.set(newValue, forKey: key("tags")) } }
+    /// `Location.setShared`: konum paylaşımı açık mı (varsayılan kapalı; v2 Faz 17b).
+    public var locationShared: Bool { get { defaults.bool(forKey: key("location_shared")) } set { defaults.set(newValue, forKey: key("location_shared")) } }
+    /// Son konum işleminin kuyruğa yazıldığı an (epoch saniye); 5 dakika aralığı için.
+    public var locationLastSentAt: TimeInterval? {
+        get { (defaults.object(forKey: key("location_last_sent_at")) as? NSNumber)?.doubleValue }
+        set { defaults.set(newValue.map { NSNumber(value: $0) }, forKey: key("location_last_sent_at")) }
+    }
     /// Herhangi bir in-app mesajın bu cihazdaki son gösterimi; app geneli aralık için (ADR-0019 §7).
     public var lastInAppImpressionAt: Date? {
         get { (defaults.object(forKey: key("in_app_last_impression_at")) as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) } }

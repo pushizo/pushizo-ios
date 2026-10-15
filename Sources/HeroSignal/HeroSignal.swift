@@ -1134,7 +1134,7 @@ public enum HeroSignal {
 
     public enum Session {
         public static func sendEvent(_ name: String, properties: [String: Any] = [:], value: Double? = nil) {
-            var op: [String: Any] = ["type": "event", "name": name, "properties": properties, "occurred_at": ISO8601DateFormatter().string(from: Date()), "at": Date().timeIntervalSince1970]
+            var op: [String: Any] = ["type": "event", "name": name, "properties": properties, "occurred_at": ISO8601DateFormatter().string(from: Date()), "event_id": UUID().uuidString.lowercased(), "at": Date().timeIntervalSince1970]
             if let value { op["value"] = value }
             enqueue(op)
             inApp.onEvent(name)

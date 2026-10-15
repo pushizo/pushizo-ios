@@ -87,6 +87,13 @@ final class HSPrivacyTests: XCTestCase {
         let anonymous = HSOwnership.eventItems(ops, subscriptionId: "sub_1", registeredToken: nil, identityHash: nil)
         XCTAssertNil(anonymous[0]["token_hash"])
         XCTAssertNil(anonymous[0]["identity_hash"])
+        XCTAssertNil(anonymous[0]["event_id"], "eski kuyruk öğesinde event_id yok")
+    }
+
+    func testEventItemsForwardClientEventId() {
+        let ops: [[String: Any]] = [["type": "event", "name": "viewed", "properties": [String: Any](), "occurred_at": "2026-10-14T10:00:01Z", "event_id": "e-123456789"]]
+        let items = HSOwnership.eventItems(ops, subscriptionId: "sub_1", registeredToken: nil, identityHash: nil)
+        XCTAssertEqual(items[0]["event_id"] as? String, "e-123456789")
     }
 
     func testDeviceInfoOmitsUnknownAppVersion() {

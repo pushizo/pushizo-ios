@@ -17,7 +17,15 @@ public struct HSApiError: Error, Equatable {
 
 /// `/sdk/v1/apps/{appId}` uçlarına JSON istek (URLSession, async/await).
 public final class HSApi {
-    public let apiUrl: String
+    /// Geçerli API kökü (sondaki `/` olmadan). Bölgesel köke geçilince (ADR-0032 §4) değişir; eşzamanlı istekler için kilitli.
+    public var apiUrl: String {
+        apiUrlLock.lock(); defer { apiUrlLock.unlock() }
+        return currentApiUrl
+    }
+    private var currentApiUrl: String
+    private let apiUrlLock = NSLock()
+    /// API kökü 421 `HS_WRONG_CELL` ile değiştiğinde çağrılır (kalıcı saklamak için).
+    public var onApiUrlChange: ((String) -> Void)?
     public let appId: String
     public let sdkVersion: String
     private let session: URLSession
@@ -27,19 +35,33 @@ public final class HSApi {
     public var identityToken: (() -> String?)?
 
     public init(apiUrl: String, appId: String, sdkVersion: String, session: URLSession = .shared) {
-        self.apiUrl = apiUrl.hasSuffix("/") ? String(apiUrl.dropLast()) : apiUrl
+        self.currentApiUrl = HSCellRouting.trimSlash(apiUrl)
         self.appId = appId
         self.sdkVersion = sdkVersion
         self.session = session
     }
 
-    public var base: String {
-        "\(apiUrl)/sdk/v1/apps/\(appId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? appId)"
+    /// API kökünü değiştirir (config `api_url`); sonraki istekler yeni kökü kullanır.
+    public func updateApiUrl(_ url: String) {
+        apiUrlLock.lock(); defer { apiUrlLock.unlock() }
+        currentApiUrl = HSCellRouting.trimSlash(url)
+    }
+
+    public var base: String { base(for: apiUrl) }
+
+    private func base(for root: String) -> String {
+        "\(root)/sdk/v1/apps/\(appId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? appId)"
     }
 
     @discardableResult
     public func request(_ method: String, _ path: String, body: [String: Any]? = nil, attempt: Int = 0) async throws -> [String: Any] {
-        guard let url = URL(string: base + path) else { throw HSApiError(status: 0, code: "BAD_URL", message: path) }
+        try await send(method, path, body: body, attempt: attempt, rerouted: false)
+    }
+
+    /// `rerouted`: istek başına en fazla bir hücre yönlendirmesi izlenir (iki hücre birbirini gösterse de döngü yok).
+    private func send(_ method: String, _ path: String, body: [String: Any]?, attempt: Int, rerouted: Bool) async throws -> [String: Any] {
+        let current = apiUrl
+        guard let url = URL(string: base(for: current) + path) else { throw HSApiError(status: 0, code: "BAD_URL", message: path) }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 15
@@ -59,18 +81,24 @@ public final class HSApi {
                 if data.isEmpty { return [:] }
                 return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
             }
-            let envelope = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? [String: Any]
+            let json = try? JSONSerialization.jsonObject(with: data)
+            if !rerouted, let target = HSCellRouting.wrongCellTarget(status: status, envelope: json, current: current) {
+                updateApiUrl(target)
+                onApiUrlChange?(target)
+                return try await send(method, path, body: body, attempt: attempt, rerouted: true)
+            }
+            let envelope = (json as? [String: Any])?["error"] as? [String: Any]
             let error = HSApiError(status: status, code: envelope?["code"] as? String ?? "HTTP_\(status)", message: envelope?["message"] as? String ?? "HTTP \(status)")
             guard error.isRetryable, attempt < backoff.count else { throw error }
             let retryAfter = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After").flatMap(UInt64.init)
             try await Task.sleep(nanoseconds: ((retryAfter ?? 0) > 0 ? retryAfter! * 1_000 : backoff[min(attempt, backoff.count - 1)]) * 1_000_000)
-            return try await self.request(method, path, body: body, attempt: attempt + 1)
+            return try await send(method, path, body: body, attempt: attempt + 1, rerouted: rerouted)
         } catch let error as HSApiError {
             throw error
         } catch {
             guard attempt < backoff.count else { throw HSApiError(status: 0, code: "NETWORK", message: error.localizedDescription) }
             try await Task.sleep(nanoseconds: backoff[min(attempt, backoff.count - 1)] * 1_000_000)
-            return try await self.request(method, path, body: body, attempt: attempt + 1)
+            return try await send(method, path, body: body, attempt: attempt + 1, rerouted: rerouted)
         }
     }
 }

@@ -194,6 +194,9 @@ public enum HeroSignal {
             queue?.clear()
             _ = store.takePendingReceived()
             store.clearIdentity()
+            // Onay yeniden verildiğinde konum paylaşımı kendiliğinden sürmez (yeniden `Location.setShared(true)` gerekir).
+            store.locationShared = false
+            store.locationLastSentAt = nil
         }
     }
 
@@ -232,6 +235,8 @@ public enum HeroSignal {
             }
             await flushPendingReceived()
             await flushQueue()
+            // Oturum başında konum (yalnızca paylaşım açık, izin verilmiş ve uygulama ön plandaysa).
+            Location.refresh()
         }
     }
 
@@ -335,12 +340,22 @@ public enum HeroSignal {
     static func deviceInfo() async -> [String: Any] {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         cacheAuthorizationStatus(settings.authorizationStatus)
+        #if targetEnvironment(macCatalyst)
+        // Mac Catalyst: UIDevice "iPad" ve iOS eşdeğeri sürüm döndürür; gerçek macOS sürümü ProcessInfo'dan okunur.
+        let model = "Mac"
+        let macVersion = ProcessInfo.processInfo.operatingSystemVersion
+        let systemVersion = "\(macVersion.majorVersion).\(macVersion.minorVersion).\(macVersion.patchVersion)"
+        let osName = "macOS"
+        #else
         let device = await UIDevice.current
         let model = await device.model
         let systemVersion = await device.systemVersion
+        let osName = "iOS"
+        #endif
         // `push_capable` bildirim iznini yansıtır; false ise sunucu push aboneliğini `pending` tutar.
         return HSDeviceInfo.make(
             model: model,
+            os: osName,
             osVersion: systemVersion,
             appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
             sdkVersion: sdkVersion,
@@ -363,9 +378,19 @@ public enum HeroSignal {
         #endif
     }
 
-    /// `embedded.mobileprovision` içindeki `aps-environment` (App Store derlemelerinde dosya yoktur → nil).
+    /**
+     Gömülü provisioning profilindeki APNs ortamı (App Store derlemelerinde dosya yoktur → nil). iOS: `embedded.mobileprovision`
+     ve `aps-environment`; Mac Catalyst: `Contents/embedded.provisionprofile` ve `com.apple.developer.aps-environment`.
+     */
     static let provisioningApsEnvironment: String? = {
-        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+        #if targetEnvironment(macCatalyst)
+        let url: URL? = Bundle.main.bundleURL.appendingPathComponent("Contents/embedded.provisionprofile")
+        let entitlementKey = "com.apple.developer.aps-environment"
+        #else
+        let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision")
+        let entitlementKey = "aps-environment"
+        #endif
+        guard let url,
               let data = try? Data(contentsOf: url),
               let text = String(data: data, encoding: .isoLatin1),
               let start = text.range(of: "<?xml"),
@@ -373,7 +398,7 @@ public enum HeroSignal {
         let plistData = Data(text[start.lowerBound..<end.upperBound].utf8)
         guard let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any],
               let entitlements = plist["Entitlements"] as? [String: Any] else { return nil }
-        return entitlements["aps-environment"] as? String
+        return entitlements[entitlementKey] as? String
     }()
 
     // MARK: - E-posta / SMS ve etkileşim aboneliği
@@ -479,7 +504,7 @@ public enum HeroSignal {
         case "tags", "properties":
             // Kullanıcı kimliği abonelik kaydıyla gelir; o zamana kadar işlem yerinde bekler, sonrakiler engellenmez.
             guard let userId = store.userId else { throw HSQueueDeferred("kullanıcı yok") }
-            var body: [String: Any] = op["type"] as? String == "tags" ? ["tags": op["tags"] ?? [:]] : ["properties": op["properties"] ?? [:]]
+            var body: [String: Any] = op["type"] as? String == "tags" ? ["tags": HSQueue.tagsBody(op)] : ["properties": op["properties"] ?? [:]]
             if let hash = store.userIdentityHash { body["identity_hash"] = hash }
             let result = try await api.request("PATCH", "/users/\(userId)", body: body)
             store.tags = result["tags"] as? [String: String] ?? store.tags
@@ -516,6 +541,16 @@ public enum HeroSignal {
             var query = ""
             if let hash = store.userIdentityHash?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) { query = "?identity_hash=\(hash)" }
             try await api.request("DELETE", "/users/\(userId)/identity/\(label)\(query)")
+        case HSLocationRules.operationType:
+            // Daha yeni bir konum işlemi kuyruktaysa bu atlanır (son durum kazanır).
+            if HSLocationRules.isSuperseded(op, queue: queue?.items ?? []) { return }
+            guard let subId = store.subscriptionId else {
+                // Kayıtlı push aboneliği yoksa sunucuda silinecek konum da yoktur; konum ise abonelik oluşana kadar bekler.
+                if HSLocationRules.isClear(op) { return }
+                throw HSQueueDeferred("push aboneliği yok")
+            }
+            guard let body = HSLocationRules.body(for: op, registeredToken: store.registeredToken) else { return }
+            try await api.request("PATCH", "/subscriptions/\(subId)", body: body)
         case "contact_add":
             try await addContact(channel: op["channel"] as? String ?? "", address: op["address"] as? String ?? "")
         case "contact_remove":
@@ -576,6 +611,8 @@ public enum HeroSignal {
             Task { await flushPendingReceived() }
             // Kullanıcı izni Ayarlar'dan değiştirmiş olabilir.
             checkPermissionChange()
+            // Ön plana dönüş: paylaşım açıksa konum en sık 5 dakikada bir yenilenir.
+            Location.refresh()
         })
         observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
             inApp.onSessionEnd()
@@ -822,9 +859,9 @@ public enum HeroSignal {
         public static func addTags(_ tags: [String: String]) { enqueue(["type": "tags", "tags": tags, "at": Date().timeIntervalSince1970]) }
         public static func removeTag(_ key: String) { removeTags([key]) }
         public static func removeTags(_ keys: [String]) {
-            var patch: [String: Any] = [:]
-            keys.forEach { patch[$0] = NSNull() }
-            enqueue(["type": "tags", "tags": patch, "at": Date().timeIntervalSince1970])
+            guard !keys.isEmpty else { return }
+            // `NSNull` UserDefaults'a yazılamaz; silmeler ayrı listede taşınır (bkz. HSQueue.tagsBody).
+            enqueue(["type": "tags", "tags": [String: Any](), "remove": Array(Set(keys)).sorted(), "at": Date().timeIntervalSince1970])
         }
         public static func getTags() -> [String: String] { storage?.tags ?? [:] }
 

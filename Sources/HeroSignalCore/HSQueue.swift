@@ -12,7 +12,11 @@ public struct HSQueueDeferred: Error, Equatable {
     }
 }
 
-/// Kalıcı işlem kuyruğu (UserDefaults); ardışık tag yamaları birleştirilir.
+/**
+ Kalıcı işlem kuyruğu (UserDefaults); ardışık tag yamaları birleştirilir. UserDefaults yalnızca property list değerleri
+ saklar (`NSNull` saklanamaz): silinecek tag anahtarları `tags` içinde değil `remove` listesinde tutulur ve istek
+ gövdesi `tagsBody(_:)` ile kurulurken `null`'a çevrilir.
+ */
 public final class HSQueue {
     public static let maxSize = 500
     private let defaults: UserDefaults
@@ -94,9 +98,27 @@ public final class HSQueue {
         let prev = queue[queue.count - 2]
         guard last["type"] as? String == "tags", prev["type"] as? String == "tags",
               var merged = prev["tags"] as? [String: Any], let lastTags = last["tags"] as? [String: Any] else { return queue }
-        for (k, v) in lastTags { merged[k] = v }
+        var removed = Set(prev["remove"] as? [String] ?? [])
+        // Sonraki işlem kazanır: yeni değer önceki silmeyi, yeni silme önceki değeri geçersiz kılar.
+        for (k, v) in lastTags {
+            merged[k] = v
+            removed.remove(k)
+        }
+        for k in last["remove"] as? [String] ?? [] {
+            merged.removeValue(forKey: k)
+            removed.insert(k)
+        }
+        var op: [String: Any] = ["type": "tags", "tags": merged, "at": last["at"] ?? Date().timeIntervalSince1970]
+        if !removed.isEmpty { op["remove"] = removed.sorted() }
         var result = Array(queue.dropLast(2))
-        result.append(["type": "tags", "tags": merged, "at": last["at"] ?? Date().timeIntervalSince1970])
+        result.append(op)
         return result
+    }
+
+    /// Kuyruktaki tag işleminden API gövdesi: `remove` anahtarları `null` (sunucuda tag silme) olur.
+    public static func tagsBody(_ op: [String: Any]) -> [String: Any] {
+        var tags = op["tags"] as? [String: Any] ?? [:]
+        for k in op["remove"] as? [String] ?? [] { tags[k] = NSNull() }
+        return tags
     }
 }

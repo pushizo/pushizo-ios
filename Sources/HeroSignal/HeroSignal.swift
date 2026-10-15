@@ -66,7 +66,10 @@ public struct HSPushSubscriptionState {
 
 /// SDK yapılandırması.
 public struct HSOptions {
-    public var apiUrl: String = "https://api.herosignal.dev"
+    /// API kökü. Varsayılan (global) değerde bırakılırsa SDK app yapılandırmasındaki bölgesel adresi (`api_url`) öğrenip
+    /// kullanır; başka bir değer verilirse korunur (yalnızca sunucu 421 `HS_WRONG_CELL` ile başka bölgeyi gösterirse oraya
+    /// geçilir). Ayrıntı: docs/sdk/ios.md.
+    public var apiUrl: String = HSCellRouting.defaultApiUrl
     /// KVKK/GDPR: onay verilene kadar ağ çağrısı yapılmaz.
     public var requiresPrivacyConsent = false
     /// APNs ortamı ("sandbox"/"development" veya "production"); nil ise DEBUG derlemesi ya da gömülü
@@ -149,9 +152,12 @@ public enum HeroSignal {
         HSLog.level = opts.logLevel
         let store = HSStorage(appId: appId, appGroup: opts.appGroup)
         storage = store
-        let client = HSApi(apiUrl: opts.apiUrl, appId: appId, sdkVersion: sdkVersion)
+        // Daha önce öğrenilen bölgesel kök aynı başlangıç kökü için kullanılır (ADR-0032 §4).
+        let client = HSApi(apiUrl: store.resolvedApiUrl(seed: opts.apiUrl), appId: appId, sdkVersion: sdkVersion)
         // Kimlik JWT'si her istekte depodan okunur (login/updateUserJwt/logout sonrası güncel değer).
         client.identityToken = { [weak store] in store?.identityJwt }
+        let seed = opts.apiUrl
+        client.onApiUrlChange = { [weak store] url in store?.saveRegionalApi(seed: seed, url: url) }
         api = client
         queue = HSQueue(defaults: store.defaults, appId: appId)
         sessionTracker = HSSessionTracker(defaults: store.defaults, appId: appId)
@@ -242,11 +248,23 @@ public enum HeroSignal {
 
     /// `/config` yanıtı: kimlik doğrulama zorunluluğu ve app geneli in-app aralığı (kalıcı; ADR-0019 §7).
     static func applyConfig(_ config: [String: Any]) async {
+        adoptRegionalApiUrl(config["api_url"])
         identityVerificationRequired = config["identity_verification_required"] as? Bool ?? false
         identityVerificationMode = HSIdentityVerificationMode(config: config["identity_verification_mode"])
         let interval = max(((config["in_app"] as? [String: Any])?["min_interval_seconds"] as? NSNumber)?.intValue ?? 0, 0)
         storage?.inAppMinIntervalSeconds = interval
         await MainActor.run { inApp.globalMinIntervalSeconds = interval }
+    }
+
+    /// Config `api_url`: `HSOptions.apiUrl` varsayılan (global) kökteyse app'in bölgesel API kökü benimsenir ve saklanır.
+    /// Geliştiricinin verdiği özel kök (kendi alan adı/vekil sunucu) korunur.
+    static func adoptRegionalApiUrl(_ candidate: Any?) {
+        guard let api, HSCellRouting.trimSlash(options.apiUrl) == HSCellRouting.defaultApiUrl,
+              let next = HSCellRouting.acceptApiUrl(candidate, current: api.apiUrl), next != api.apiUrl
+        else { return }
+        HSLog.log(.info, "bölgesel API kökü kullanılıyor: \(next)")
+        api.updateApiUrl(next)
+        storage?.saveRegionalApi(seed: options.apiUrl, url: next)
     }
 
     /// Kuyruğu işler; kalıcı olarak reddedilen işlemler hata raporuna eklenir. Onay bekleniyorsa işlemler kuyrukta kalır.

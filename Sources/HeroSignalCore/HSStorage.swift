@@ -47,6 +47,22 @@ public final class HSStorage {
     }
     /// Config'den gelen `in_app.min_interval_seconds`; config alınamazsa son bilinen değer kullanılır.
     public var inAppMinIntervalSeconds: Int { get { defaults.integer(forKey: key("in_app_min_interval_seconds")) } set { defaults.set(newValue, forKey: key("in_app_min_interval_seconds")) } }
+    /// Öğrenilen bölgesel API kökü (ADR-0032 §4; config `api_url` veya 421 `HS_WRONG_CELL`) ve öğrenildiği başlangıç
+    /// kökü (`HSOptions.apiUrl`). App Group ile NSE'ye de geçer; başlangıç kökü değişirse kullanılmaz.
+    public var regionalApiUrl: String? { get { defaults.string(forKey: key("regional_api_url")) } set { defaults.set(newValue, forKey: key("regional_api_url")) } }
+    public var regionalApiSeed: String? { get { defaults.string(forKey: key("regional_api_seed")) } set { defaults.set(newValue, forKey: key("regional_api_seed")) } }
+
+    /// Bölgesel kökü başlangıç köküyle birlikte saklar.
+    public func saveRegionalApi(seed: String, url: String) {
+        regionalApiSeed = HSCellRouting.trimSlash(seed)
+        regionalApiUrl = url
+    }
+
+    /// Başlangıç kökü için kullanılacak API kökü (kayıtlı geçerli bölgesel kök veya `seed`).
+    public func resolvedApiUrl(seed: String) -> String {
+        HSCellRouting.initialBase(seed: seed, savedSeed: regionalApiSeed, savedUrl: regionalApiUrl)
+    }
+
     /// NSE: uygulama kapalıyken gönderilemeyen `received` bildirimleri.
     public var pendingReceived: [String] { get { defaults.stringArray(forKey: key("pending_received")) ?? [] } set { defaults.set(newValue, forKey: key("pending_received")) } }
 

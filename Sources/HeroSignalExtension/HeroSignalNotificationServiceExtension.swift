@@ -41,7 +41,9 @@ public final class HeroSignalNotificationServiceExtension {
 
     public init(appId: String, apiUrl: String, appGroup: String? = nil, requiresPrivacyConsent: Bool = false) {
         let storage = HSStorage(appId: appId, appGroup: appGroup)
-        let api = HSApi(apiUrl: apiUrl, appId: appId, sdkVersion: "0.1.0")
+        // Uygulamanın App Group'a yazdığı bölgesel API kökü (ADR-0032 §4) aynı başlangıç kökü için kullanılır.
+        let api = HSApi(apiUrl: storage.resolvedApiUrl(seed: apiUrl), appId: appId, sdkVersion: "0.1.0")
+        api.onApiUrlChange = { [weak storage] url in storage?.saveRegionalApi(seed: apiUrl, url: url) }
         // Uygulamanın App Group'a yazdığı kimlik JWT'si NSE isteklerinde de `Authorization` başlığıyla gider (ADR-0023 §9).
         api.identityToken = { [weak storage] in storage?.identityJwt }
         self.api = api

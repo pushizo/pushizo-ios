@@ -4,11 +4,11 @@ import ActivityKit
 #endif
 
 /**
- Sunucunun uzaktan başlattığı (push-to-start) etkinliğin `attributes` içine eklediği HeroSignal verisi
- (`"herosignal": { "activity_id": "…" }`, ADR-0024). SDK etkinlik başlayınca güncelleme belirtecini bu kimlikle kaydeder;
+ Sunucunun uzaktan başlattığı (push-to-start) etkinliğin `attributes` içine eklediği Pushizo verisi
+ (`"pushizo": { "activity_id": "…" }`, ADR-0024). SDK etkinlik başlayınca güncelleme belirtecini bu kimlikle kaydeder;
  yerelde (`Activity.request`) başlatılan etkinliklerde kimliği geliştirici verir.
  */
-public struct HeroSignalActivityData: Codable, Hashable {
+public struct PushizoActivityData: Codable, Hashable {
     public let activityId: String
 
     public init(activityId: String) {
@@ -21,24 +21,24 @@ public struct HeroSignalActivityData: Codable, Hashable {
 }
 
 /**
- HeroSignal ile izlenecek `ActivityAttributes` tiplerinin uyduğu protokol. Alan adı `herosignal` olmalıdır (sunucu
- start payload'ındaki anahtar); yerel başlatmada `HeroSignalActivityData(activityId:)` verilir, uzaktan başlatmada sunucu
+ Pushizo ile izlenecek `ActivityAttributes` tiplerinin uyduğu protokol. Alan adı `pushizo` olmalıdır (sunucu
+ start payload'ındaki anahtar); yerel başlatmada `PushizoActivityData(activityId:)` verilir, uzaktan başlatmada sunucu
  doldurur.
 
  ```swift
- struct DeliveryAttributes: ActivityAttributes, HeroSignalLiveActivityAttributes {
+ struct DeliveryAttributes: ActivityAttributes, PushizoLiveActivityAttributes {
      struct ContentState: Codable, Hashable { var status: String; var eta: Int }
      var orderNo: String
-     var herosignal: HeroSignalActivityData?
+     var pushizo: PushizoActivityData?
  }
  ```
  */
-public protocol HeroSignalLiveActivityAttributes {
-    var herosignal: HeroSignalActivityData? { get }
+public protocol PushizoLiveActivityAttributes {
+    var pushizo: PushizoActivityData? { get }
 }
 
 /// Live Activity alan değeri: metin, sayı veya mantıksal değer (sunucu şemasındaki ilkel türler).
-public enum HeroSignalLiveActivityValue: Codable, Hashable, CustomStringConvertible {
+public enum PushizoLiveActivityValue: Codable, Hashable, CustomStringConvertible {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -123,12 +123,12 @@ public enum HeroSignalLiveActivityValue: Codable, Hashable, CustomStringConverti
      `[String: Any]` sözlüğünü doğrulayıp çevirir. `nil` girdi boş sözlüktür; sözlük olmayan girdi, 1-64 karakter dışı
      anahtar, 4000 karakteri aşan metin veya ilkel olmayan değer varsa nil döner.
      */
-    public static func dictionary(from raw: Any?) -> [String: HeroSignalLiveActivityValue]? {
+    public static func dictionary(from raw: Any?) -> [String: PushizoLiveActivityValue]? {
         guard let raw, !(raw is NSNull) else { return [:] }
         guard let map = raw as? [String: Any] else { return nil }
-        var out: [String: HeroSignalLiveActivityValue] = [:]
+        var out: [String: PushizoLiveActivityValue] = [:]
         for (key, item) in map {
-            guard (1...maxKeyLength).contains(key.count), let value = HeroSignalLiveActivityValue(any: item) else { return nil }
+            guard (1...maxKeyLength).contains(key.count), let value = PushizoLiveActivityValue(any: item) else { return nil }
             if case let .string(text) = value, text.count > maxStringLength { return nil }
             out[key] = value
         }
@@ -156,16 +156,16 @@ struct HSDynamicCodingKey: CodingKey {
 
 private enum HSFlatValues {
     /// Düz nesnedeki ilkel değerler; `excluding` anahtarları ve ilkel olmayan/null değerler atlanır.
-    static func decode(from decoder: Decoder, excluding: Set<String> = []) throws -> [String: HeroSignalLiveActivityValue] {
+    static func decode(from decoder: Decoder, excluding: Set<String> = []) throws -> [String: PushizoLiveActivityValue] {
         let container = try decoder.container(keyedBy: HSDynamicCodingKey.self)
-        var out: [String: HeroSignalLiveActivityValue] = [:]
+        var out: [String: PushizoLiveActivityValue] = [:]
         for key in container.allKeys where !excluding.contains(key.stringValue) {
-            if let value = try? container.decode(HeroSignalLiveActivityValue.self, forKey: key) { out[key.stringValue] = value }
+            if let value = try? container.decode(PushizoLiveActivityValue.self, forKey: key) { out[key.stringValue] = value }
         }
         return out
     }
 
-    static func encode(_ values: [String: HeroSignalLiveActivityValue], to container: inout KeyedEncodingContainer<HSDynamicCodingKey>) throws {
+    static func encode(_ values: [String: PushizoLiveActivityValue], to container: inout KeyedEncodingContainer<HSDynamicCodingKey>) throws {
         for (key, value) in values {
             try container.encode(value, forKey: HSDynamicCodingKey(key))
         }
@@ -175,18 +175,18 @@ private enum HSFlatValues {
 /**
  Genel amaçlı Live Activity türü: çapraz platform köprüleri (Flutter, React Native, Capacitor, Cordova, MAUI, Unity)
  tip-güvenli `ActivityAttributes` oluşturamadığından bu tür kullanılır. Sunucuda tür adı
- `HeroSignalDefaultLiveActivityAttributes` olarak tanımlanır; `attributes` ve `content_state` alanları düz nesnedir ve
+ `PushizoDefaultLiveActivityAttributes` olarak tanımlanır; `attributes` ve `content_state` alanları düz nesnedir ve
  değerleri `data` sözlüğünden okunur (`context.attributes.data["title"]`, `context.state.data["status"]`).
  */
-public struct HeroSignalDefaultLiveActivityAttributes: HeroSignalLiveActivityAttributes, Codable {
+public struct PushizoDefaultLiveActivityAttributes: PushizoLiveActivityAttributes, Codable {
     /// Dashboard/API'de tanımlanacak tür adı (Swift tip adı).
-    public static let activityType = "HeroSignalDefaultLiveActivityAttributes"
+    public static let activityType = "PushizoDefaultLiveActivityAttributes"
 
     /// İçerik durumu: sunucunun `content_state` nesnesindeki tüm ilkel alanlar.
     public struct ContentState: Codable, Hashable {
-        public var data: [String: HeroSignalLiveActivityValue]
+        public var data: [String: PushizoLiveActivityValue]
 
-        public init(data: [String: HeroSignalLiveActivityValue] = [:]) {
+        public init(data: [String: PushizoLiveActivityValue] = [:]) {
             self.data = data
         }
 
@@ -200,32 +200,32 @@ public struct HeroSignalDefaultLiveActivityAttributes: HeroSignalLiveActivityAtt
         }
     }
 
-    /// Etkinlik boyunca değişmeyen alanlar (`herosignal` hariç).
-    public var data: [String: HeroSignalLiveActivityValue]
-    public var herosignal: HeroSignalActivityData?
+    /// Etkinlik boyunca değişmeyen alanlar (`pushizo` hariç).
+    public var data: [String: PushizoLiveActivityValue]
+    public var pushizo: PushizoActivityData?
 
-    public init(data: [String: HeroSignalLiveActivityValue] = [:], herosignal: HeroSignalActivityData? = nil) {
+    public init(data: [String: PushizoLiveActivityValue] = [:], pushizo: PushizoActivityData? = nil) {
         self.data = data
-        self.herosignal = herosignal
+        self.pushizo = pushizo
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: HSDynamicCodingKey.self)
-        // Bozuk `herosignal` alanı etkinliği düşürmez; kimlik `Activity.id`'ye döner.
-        herosignal = (try? container.decodeIfPresent(HeroSignalActivityData.self, forKey: HSDynamicCodingKey("herosignal"))) ?? nil
-        data = try HSFlatValues.decode(from: decoder, excluding: ["herosignal"])
+        // Bozuk `pushizo` alanı etkinliği düşürmez; kimlik `Activity.id`'ye döner.
+        pushizo = (try? container.decodeIfPresent(PushizoActivityData.self, forKey: HSDynamicCodingKey("pushizo"))) ?? nil
+        data = try HSFlatValues.decode(from: decoder, excluding: ["pushizo"])
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: HSDynamicCodingKey.self)
         try HSFlatValues.encode(data, to: &container)
-        try container.encodeIfPresent(herosignal, forKey: HSDynamicCodingKey("herosignal"))
+        try container.encodeIfPresent(pushizo, forKey: HSDynamicCodingKey("pushizo"))
     }
 }
 
 #if canImport(ActivityKit) && os(iOS)
 @available(iOS 16.1, *)
-extension HeroSignalDefaultLiveActivityAttributes: ActivityAttributes {}
+extension PushizoDefaultLiveActivityAttributes: ActivityAttributes {}
 #endif
 
 /// Live Activity belirteci türü (`POST /live-activities/tokens` `kind`).
@@ -240,7 +240,7 @@ public enum HSLiveActivityTokenKind: String {
 public enum HSLiveActivityError: Error, Equatable {
     /// iOS 16.1 öncesi, ActivityKit'siz platform (Android/web köprülerinde aynı kod).
     case notSupported(String)
-    /// `HeroSignal.initialize` çağrılmadı.
+    /// `Pushizo.initialize` çağrılmadı.
     case notInitialized
     case invalidArgument(String)
     /// Sistem etkinliği başlatamadı (Live Activities kapalı, `NSSupportsLiveActivities` yok, üst sınır aşıldı vb.).
@@ -258,7 +258,7 @@ public enum HSLiveActivityError: Error, Equatable {
     public var message: String {
         switch self {
         case let .notSupported(message), let .invalidArgument(message), let .requestFailed(message): return message
-        case .notInitialized: return "HeroSignal.initialize çağrılmadı"
+        case .notInitialized: return "Pushizo.initialize çağrılmadı"
         }
     }
 }

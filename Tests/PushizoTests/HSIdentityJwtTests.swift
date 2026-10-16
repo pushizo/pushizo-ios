@@ -1,5 +1,5 @@
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 /// İstekleri ağa çıkarmadan yakalar; son isteği saklar ve boş JSON yanıtı döner.
 private final class CapturingURLProtocol: URLProtocol {

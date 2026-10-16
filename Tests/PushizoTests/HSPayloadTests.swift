@@ -1,5 +1,5 @@
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 final class HSPayloadTests: XCTestCase {
     func testParsesApsAndHs() {
@@ -34,7 +34,7 @@ final class HSPayloadTests: XCTestCase {
         XCTAssertNil(n?.badgeSet)
     }
 
-    func testNonHeroSignalPayloadReturnsNil() {
+    func testNonPushizoPayloadReturnsNil() {
         XCTAssertNil(HSNotification(userInfo: ["aps": ["content-available": 1]]))
     }
 

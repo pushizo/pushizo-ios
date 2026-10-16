@@ -1,7 +1,7 @@
 import Foundation
-// SPM: ayrı modül; CocoaPods alt spec'leri tek "HeroSignal" modülünde derlenir.
-#if canImport(HeroSignalCore)
-import HeroSignalCore
+// SPM: ayrı modül; CocoaPods alt spec'leri tek "Pushizo" modülünde derlenir.
+#if canImport(PushizoCore)
+import PushizoCore
 #endif
 import UIKit
 import WebKit
@@ -22,7 +22,7 @@ public extension HSInAppLifecycleListener {
 }
 
 /// In-app mesajı çizen katman. Varsayılan: UIWindow üstünde UIKit görünümü ([HSInAppWindowRenderer]).
-/// Özel çizim (ör. Flutter köprüsü) `HeroSignal.InAppMessages.setRenderer` ile kaydedilir. Ana iş parçacığında çağrılır.
+/// Özel çizim (ör. Flutter köprüsü) `Pushizo.InAppMessages.setRenderer` ile kaydedilir. Ana iş parçacığında çağrılır.
 /// HTML içerikli mesajlar (`display.isHtml`) özel çizime verilmez: yalıtım ve köprü doğrulaması (ADR-0027) yalnızca
 /// varsayılan çizimin WKWebView'ında uygulandığından her zaman varsayılan çizimle gösterilir.
 public protocol HSInAppRenderer: AnyObject {
@@ -95,7 +95,7 @@ public final class HSInAppHandle {
     func htmlAddTag(_ key: String, value: String) {
         onMain { [self] in
             guard !finished, allowSideEffect() else { return }
-            HeroSignal.User.addTags([key: value])
+            Pushizo.User.addTags([key: value])
         }
     }
 
@@ -103,7 +103,7 @@ public final class HSInAppHandle {
     func htmlTrackEvent(_ name: String, properties: [String: HSBridgeValue]) {
         onMain { [self] in
             guard !finished, allowSideEffect() else { return }
-            HeroSignal.Session.sendEvent(name, properties: properties.mapValues(\.foundationValue))
+            Pushizo.Session.sendEvent(name, properties: properties.mapValues(\.foundationValue))
         }
     }
 
@@ -268,12 +268,12 @@ final class HSInAppController {
 
     private func refresh(minAge: TimeInterval) {
         if let fetchedAt, Date().timeIntervalSince(fetchedAt) < minAge { runPendingSessionStart(); return }
-        guard !fetching, let subId = HeroSignal.engagementSubscriptionId(), let api = HeroSignal.api else { return }
+        guard !fetching, let subId = Pushizo.engagementSubscriptionId(), let api = Pushizo.api else { return }
         fetching = true
         // Sahiplik kanıtı (ADR-0016): kayıtlı token'ın veya kanonik adresin özeti.
         let query = HSOwnership.subscriptionQuery(
             subscriptionId: subId,
-            registeredToken: HeroSignal.storage.flatMap { HeroSignal.ownershipToken($0, subscriptionId: subId) }
+            registeredToken: Pushizo.storage.flatMap { Pushizo.ownershipToken($0, subscriptionId: subId) }
         )
         Task {
             var list: [HSInAppMessage]?
@@ -283,10 +283,10 @@ final class HSInAppController {
             } catch {
                 HSLog.log(.warn, "in-app listesi alınamadı: \(error)")
                 if (error as? HSApiError)?.isRetryable != true {
-                    HeroSignal.reportError("in_app_fetch_failed", "in-app listesi alınamadı", error: error)
+                    Pushizo.reportError("in_app_fetch_failed", "in-app listesi alınamadı", error: error)
                 }
             }
-            let pending = HeroSignal.pendingInAppMessageIds()
+            let pending = Pushizo.pendingInAppMessageIds()
             await MainActor.run {
                 self.fetching = false
                 if let list {
@@ -316,7 +316,7 @@ final class HSInAppController {
         let state = HSInAppState(screen: screen, triggers: triggers, sessionSeconds: sessionSeconds)
         guard let message = HSInAppRules.select(messages, cause: cause, state: state, locals: locals, now: Date(),
                                                 globalMinIntervalSeconds: globalMinIntervalSeconds,
-                                                lastImpressionAt: HeroSignal.storage?.lastInAppImpressionAt) else { return }
+                                                lastImpressionAt: Pushizo.storage?.lastInAppImpressionAt) else { return }
         present(message)
     }
 
@@ -340,7 +340,7 @@ final class HSInAppController {
         local.lastAt = now
         locals[id] = local
         // App geneli aralık herhangi bir mesajın son gösteriminden ölçülür; uygulama yeniden başlasa da korunur.
-        HeroSignal.storage?.lastInAppImpressionAt = now
+        Pushizo.storage?.lastInAppImpressionAt = now
         record(handle.message, type: "impression", buttonId: nil)
         notifyLifecycle { $0.onDidDisplay(handle.message) }
     }
@@ -368,11 +368,11 @@ final class HSInAppController {
                 UIApplication.shared.open(target) { ok in if !ok { HSLog.log(.warn, "in-app adresi açılamadı") } }
             }
         case let .tags(tags):
-            if !tags.isEmpty { HeroSignal.User.addTags(tags) }
+            if !tags.isEmpty { Pushizo.User.addTags(tags) }
         case let .outcome(name, value):
-            HeroSignal.Session.sendEvent(name, value: value)
+            Pushizo.Session.sendEvent(name, value: value)
         case .pushPrompt:
-            HeroSignal.Notifications.requestPermission()
+            Pushizo.Notifications.requestPermission()
         case .dismiss:
             break
         }
@@ -416,7 +416,7 @@ final class HSInAppController {
         if let buttonId { op["button_id"] = buttonId }
         // Sunucunun seçtiği A/B varyantı olayla birlikte geri gönderilir.
         if let variantId = message.variantId { op["variant_id"] = variantId }
-        HeroSignal.enqueue(op)
+        Pushizo.enqueue(op)
     }
 }
 

@@ -1,12 +1,12 @@
 import Foundation
-#if canImport(HeroSignalCore)
-import HeroSignalCore
+#if canImport(PushizoCore)
+import PushizoCore
 #endif
 #if canImport(ActivityKit) && os(iOS)
 import ActivityKit
 #endif
 
-extension HeroSignal {
+extension Pushizo {
     /**
      iOS Live Activities (ADR-0024). SDK, kaydedilen `ActivityAttributes` türlerinin push-to-start belirtecini (iOS 17.2+)
      ve başlayan her etkinliğin güncelleme belirtecini sunucuya kaydeder; etkinlik bitince (`ended`/`dismissed`) belirteç
@@ -15,7 +15,7 @@ extension HeroSignal {
 
      ```swift
      // initialize'dan sonra, uygulama her açıldığında:
-     if #available(iOS 16.1, *) { HeroSignal.LiveActivities.register(DeliveryAttributes.self) }
+     if #available(iOS 16.1, *) { Pushizo.LiveActivities.register(DeliveryAttributes.self) }
      ```
 
      Tür adı Swift tip adıdır (`String(describing: T.self)`) ve dashboard/API'de aynı adla tanımlanmalıdır.
@@ -25,7 +25,7 @@ extension HeroSignal {
      */
     public enum LiveActivities {
         /// Çapraz platform köprülerinin kullandığı genel tür adı (sunucuda bu adla tanımlanır).
-        public static var defaultActivityType: String { HeroSignalDefaultLiveActivityAttributes.activityType }
+        public static var defaultActivityType: String { PushizoDefaultLiveActivityAttributes.activityType }
 
         /// Mac Catalyst'te `PLATFORM_NOT_SUPPORTED` hatasının mesajı.
         static let catalystUnsupportedMessage = "Live Activities Mac Catalyst'te desteklenmez"
@@ -33,13 +33,13 @@ extension HeroSignal {
         #if canImport(ActivityKit) && os(iOS)
         /**
          Türü izlemeye alır: push-to-start belirteci (iOS 17.2+) kaydedilir; zaten çalışan ve sonradan başlayan (uzaktan
-         veya yerel) her etkinliğin güncelleme belirteci `attributes.herosignal?.activityId ?? activity.id` kimliğiyle
-         kaydedilir. Aynı tür için tekrar çağrı etkisizdir. `HeroSignal.initialize`'dan sonra çağrılmalıdır.
+         veya yerel) her etkinliğin güncelleme belirteci `attributes.pushizo?.activityId ?? activity.id` kimliğiyle
+         kaydedilir. Aynı tür için tekrar çağrı etkisizdir. `Pushizo.initialize`'dan sonra çağrılmalıdır.
          */
         @available(iOS 16.1, *)
-        public static func register<T: ActivityAttributes & HeroSignalLiveActivityAttributes>(_ type: T.Type) {
+        public static func register<T: ActivityAttributes & PushizoLiveActivityAttributes>(_ type: T.Type) {
             guard isInitialized else {
-                HSLog.log(.error, "LiveActivities.register: önce HeroSignal.initialize çağrılmalı")
+                HSLog.log(.error, "LiveActivities.register: önce Pushizo.initialize çağrılmalı")
                 return
             }
             #if targetEnvironment(macCatalyst)
@@ -50,14 +50,14 @@ extension HeroSignal {
         }
 
         /**
-         `HeroSignalLiveActivityAttributes`'a uymayan bir türün yerelde (`Activity.request`) başlatılan etkinliğini verilen
-         kimlikle izler. Protokole uyan türlerde gerekmez: `herosignal: HeroSignalActivityData(activityId:)` ile başlatılan
+         `PushizoLiveActivityAttributes`'a uymayan bir türün yerelde (`Activity.request`) başlatılan etkinliğini verilen
+         kimlikle izler. Protokole uyan türlerde gerekmez: `pushizo: PushizoActivityData(activityId:)` ile başlatılan
          etkinlik `register` tarafından bu kimlikle izlenir. Etkinlik zaten izleniyorsa çağrı etkisizdir.
          */
         @available(iOS 16.1, *)
         public static func startTracking<T: ActivityAttributes>(activity: Activity<T>, activityId: String) {
             guard isInitialized else {
-                HSLog.log(.error, "LiveActivities.startTracking: önce HeroSignal.initialize çağrılmalı")
+                HSLog.log(.error, "LiveActivities.startTracking: önce Pushizo.initialize çağrılmalı")
                 return
             }
             guard HSLiveActivities.isValidActivityId(activityId) else {
@@ -73,9 +73,9 @@ extension HeroSignal {
         #endif
 
         /**
-         Genel türü (`HeroSignalDefaultLiveActivityAttributes`) `register` eder; köprüler `setupDefaultLiveActivity()` ile
+         Genel türü (`PushizoDefaultLiveActivityAttributes`) `register` eder; köprüler `setupDefaultLiveActivity()` ile
          çağırır. iOS 16.1 öncesinde `HSLiveActivityError.notSupported`, başlatılmamış SDK'da `.notInitialized` fırlatır.
-         Widget extension'da `ActivityConfiguration(for: HeroSignalDefaultLiveActivityAttributes.self)` tanımlanmalıdır.
+         Widget extension'da `ActivityConfiguration(for: PushizoDefaultLiveActivityAttributes.self)` tanımlanmalıdır.
          Mac Catalyst'te her zaman `.notSupported` (`PLATFORM_NOT_SUPPORTED`).
          */
         public static func setupDefaultLiveActivity() throws {
@@ -85,7 +85,7 @@ extension HeroSignal {
             #else
             #if canImport(ActivityKit) && os(iOS)
             if #available(iOS 16.1, *) {
-                HSLiveActivityTracker.shared.register(HeroSignalDefaultLiveActivityAttributes.self)
+                HSLiveActivityTracker.shared.register(PushizoDefaultLiveActivityAttributes.self)
                 return
             }
             #endif
@@ -96,7 +96,7 @@ extension HeroSignal {
         /**
          Genel türle yerel bir etkinlik başlatır (iOS 16.1+) ve güncelleme belirtecini `activityId` ile kaydeder; sunucu
          sonraki `update`/`end` çağrılarını bu kimlikle yapar. `attributes` ve `contentState` değerleri metin, sayı veya
-         mantıksal değerdir (anahtar 1-64 karakter; `attributes` içinde `herosignal` anahtarı ayrılmıştır).
+         mantıksal değerdir (anahtar 1-64 karakter; `attributes` içinde `pushizo` anahtarı ayrılmıştır).
          Hata: `.invalidArgument`, `.notSupported`, `.notInitialized`, `.requestFailed` (Live Activities kapalı vb.).
          */
         public static func startDefaultLiveActivity(activityId: String, attributes: [String: Any], contentState: [String: Any]) throws {
@@ -104,11 +104,11 @@ extension HeroSignal {
             guard HSLiveActivities.isValidActivityId(activityId) else {
                 throw HSLiveActivityError.invalidArgument("activityId 1-100 karakter olmalı (harf, rakam ve _ . : -)")
             }
-            guard attributes["herosignal"] == nil else {
-                throw HSLiveActivityError.invalidArgument("attributes içinde 'herosignal' anahtarı ayrılmıştır")
+            guard attributes["pushizo"] == nil else {
+                throw HSLiveActivityError.invalidArgument("attributes içinde 'pushizo' anahtarı ayrılmıştır")
             }
-            guard let attributeValues = HeroSignalLiveActivityValue.dictionary(from: attributes),
-                  let stateValues = HeroSignalLiveActivityValue.dictionary(from: contentState) else {
+            guard let attributeValues = PushizoLiveActivityValue.dictionary(from: attributes),
+                  let stateValues = PushizoLiveActivityValue.dictionary(from: contentState) else {
                 throw HSLiveActivityError.invalidArgument("attributes/contentState değerleri metin, sayı veya mantıksal olmalı (anahtar 1-64 karakter)")
             }
             #if targetEnvironment(macCatalyst)
@@ -144,7 +144,7 @@ final class HSLiveActivityTracker {
     /// Son gönderilen belirteç (anahtar: tür + tür/etkinlik).
     private var sentTokens: [String: String] = [:]
 
-    func register<T: ActivityAttributes & HeroSignalLiveActivityAttributes>(_ type: T.Type) {
+    func register<T: ActivityAttributes & PushizoLiveActivityAttributes>(_ type: T.Type) {
         let activityType = String(describing: T.self)
         guard HSLiveActivities.isValidActivityType(activityType) else {
             HSLog.log(.error, "Live Activity türü adı geçersiz: \(activityType) (harf, rakam, alt çizgi)")
@@ -176,9 +176,9 @@ final class HSLiveActivityTracker {
         }
     }
 
-    /// Sunucunun verdiği kimlik (`attributes.herosignal.activity_id`); yoksa sistemin etkinlik kimliği.
-    static func activityId<T: ActivityAttributes & HeroSignalLiveActivityAttributes>(of activity: Activity<T>) -> String {
-        if let id = activity.attributes.herosignal?.activityId, HSLiveActivities.isValidActivityId(id) { return id }
+    /// Sunucunun verdiği kimlik (`attributes.pushizo.activity_id`); yoksa sistemin etkinlik kimliği.
+    static func activityId<T: ActivityAttributes & PushizoLiveActivityAttributes>(of activity: Activity<T>) -> String {
+        if let id = activity.attributes.pushizo?.activityId, HSLiveActivities.isValidActivityId(id) { return id }
         return activity.id
     }
 
@@ -214,17 +214,17 @@ final class HSLiveActivityTracker {
         lock.unlock()
         // Etkinlik bitti veya kapatıldı: güncelleme belirteci artık geçersizdir.
         if finished, hadToken || activity.pushToken != nil {
-            HeroSignal.enqueue(HSLiveActivities.deleteOperation(activityType: activityType, kind: .update, activityId: activityId))
+            Pushizo.enqueue(HSLiveActivities.deleteOperation(activityType: activityType, kind: .update, activityId: activityId))
         }
     }
 
-    func startDefault(activityId: String, attributes: [String: HeroSignalLiveActivityValue], contentState: [String: HeroSignalLiveActivityValue]) throws {
+    func startDefault(activityId: String, attributes: [String: PushizoLiveActivityValue], contentState: [String: PushizoLiveActivityValue]) throws {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             throw HSLiveActivityError.requestFailed("Live Activities bu cihazda kapalı (Ayarlar veya NSSupportsLiveActivities)")
         }
-        let activityAttributes = HeroSignalDefaultLiveActivityAttributes(data: attributes, herosignal: HeroSignalActivityData(activityId: activityId))
-        let state = HeroSignalDefaultLiveActivityAttributes.ContentState(data: contentState)
-        let activity: Activity<HeroSignalDefaultLiveActivityAttributes>
+        let activityAttributes = PushizoDefaultLiveActivityAttributes(data: attributes, pushizo: PushizoActivityData(activityId: activityId))
+        let state = PushizoDefaultLiveActivityAttributes.ContentState(data: contentState)
+        let activity: Activity<PushizoDefaultLiveActivityAttributes>
         do {
             if #available(iOS 16.2, *) {
                 activity = try Activity.request(attributes: activityAttributes, content: ActivityContent(state: state, staleDate: nil), pushType: .token)
@@ -234,7 +234,7 @@ final class HSLiveActivityTracker {
         } catch {
             throw HSLiveActivityError.requestFailed("Live Activity başlatılamadı: \(error.localizedDescription)")
         }
-        track(activity, activityType: HeroSignalDefaultLiveActivityAttributes.activityType, activityId: activityId)
+        track(activity, activityType: PushizoDefaultLiveActivityAttributes.activityType, activityId: activityId)
     }
 
     private func enqueueToken(activityType: String, kind: HSLiveActivityTokenKind, activityId: String?, token: Data) {
@@ -246,7 +246,7 @@ final class HSLiveActivityTracker {
         if !duplicate { sentTokens[key] = hex }
         lock.unlock()
         guard !duplicate else { return }
-        HeroSignal.enqueue(HSLiveActivities.tokenOperation(activityType: activityType, kind: kind, activityId: activityId, token: hex))
+        Pushizo.enqueue(HSLiveActivities.tokenOperation(activityType: activityType, kind: kind, activityId: activityId, token: hex))
     }
 
     static func tokenKey(activityType: String, kind: HSLiveActivityTokenKind, activityId: String?) -> String {

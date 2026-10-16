@@ -1,5 +1,5 @@
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 /// Tercih modelleri (ADR-0019 §4): yanıt ayrıştırma ve girdi doğrulama; Android `HsPreferencesTest` ile aynı vakalar.
 final class HSPreferencesTests: XCTestCase {

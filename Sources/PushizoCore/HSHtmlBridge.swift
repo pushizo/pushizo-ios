@@ -1,6 +1,6 @@
 import Foundation
 
-/// HTML in-app köprüsü (`HeroSignalBridge`) olay özelliği değeri.
+/// HTML in-app köprüsü (`PushizoBridge`) olay özelliği değeri.
 public enum HSBridgeValue: Equatable {
     case string(String)
     case number(Double)
@@ -29,11 +29,11 @@ public enum HSHtmlBridgeAction: Equatable {
 }
 
 /**
- HTML in-app mesajı belgesi ve `HeroSignalBridge` köprü protokolü (v2 Faz 18, ADR-0027). Yalnızca Foundation kullanır;
+ HTML in-app mesajı belgesi ve `PushizoBridge` köprü protokolü (v2 Faz 18, ADR-0027). Yalnızca Foundation kullanır;
  ortak vektörlerle (`sdk/testdata/html-bridge-vectors.json`) sınanır.
 
  Mantık `packages/shared/src/html-in-app.ts` ile birebir aynıdır; tek fark köprü betiğinin mesajı `window.parent`
- yerine `window.webkit.messageHandlers.heroSignalBridge.postMessage(JSON)` ile göndermesidir. Uzunluklar JavaScript gibi
+ yerine `window.webkit.messageHandlers.pushizoBridge.postMessage(JSON)` ile göndermesidir. Uzunluklar JavaScript gibi
  UTF-16 birimiyle ölçülür. Güvenlik modeli temizleme değil yalıtımdır: CSP ağ isteklerini ve dış betikleri engeller,
  WKWebView yapılandırması (`HSHtmlInAppView`) gezinme ve kalıcı depolamayı kapatır, uygulamaya yalnızca burada
  doğrulanan dört eylem ulaşır.
@@ -41,14 +41,14 @@ public enum HSHtmlBridgeAction: Equatable {
 public enum HSHtmlBridge {
     /// Belgeye eklenen içerik güvenliği politikası (Web SDK ile aynı).
     public static let csp = "default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
-    public static let mark = "herosignal-bridge"
+    public static let mark = "pushizo-bridge"
     public static let version = 1
     /// HTML içeriği üst sınırı (UTF-16 birimi).
     public static let maxHtmlLength = 100_000
     /// Köprüden gelen tek mesajın üst sınırı (UTF-16 birimi); daha büyüğü ayrıştırılmadan reddedilir.
     public static let maxMessageLength = 32_000
     /// `WKUserContentController` ileti işleyicisinin adı.
-    public static let handlerName = "heroSignalBridge"
+    public static let handlerName = "pushizoBridge"
 
     private static let maxProps = 20
     private static let nonceAlphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
@@ -194,7 +194,7 @@ public enum HSHtmlBridge {
     }
 
     /**
-     WKWebView içinde çalışan köprü betiği (Web SDK `htmlBridgeScript` ile aynı davranış). `HeroSignalBridge` değiştirilemez
+     WKWebView içinde çalışan köprü betiği (Web SDK `htmlBridgeScript` ile aynı davranış). `PushizoBridge` değiştirilemez
      nesnedir; bağlantı tıklamaları gezinme yerine `click('link', href)` olur, `data-hs-close` kapatır,
      `data-hs-action="kimlik"` tıklama bildirir, form gönderimi engellenir, yükseklik `resize` ile bildirilir.
      İleti işleyicisi betik başında yakalanır (mesajın kendi betikleri `window.webkit`i sonradan değiştiremez).
@@ -211,7 +211,7 @@ public enum HSHtmlBridge {
             "addTag:function(k,v){s({type:\"add_tag\",key:t(k,128),value:String(v==null?\"\":v).slice(0,255)})},",
             "trackEvent:function(n,p){var o={};try{o=JSON.parse(JSON.stringify(p||{}))}catch(e){}s({type:\"track_event\",name:t(n,100),props:o})}",
             "});",
-            "try{Object.defineProperty(window,\"HeroSignalBridge\",{value:B,writable:false,configurable:false})}catch(e){}",
+            "try{Object.defineProperty(window,\"PushizoBridge\",{value:B,writable:false,configurable:false})}catch(e){}",
             "document.addEventListener(\"click\",function(e){var el=e.target;if(!el||!el.closest)return;",
             "var c=el.closest(\"[data-hs-close]\");if(c){e.preventDefault();B.close();return}",
             "var a=el.closest(\"[data-hs-action]\");var l=el.closest(\"a[href]\");",

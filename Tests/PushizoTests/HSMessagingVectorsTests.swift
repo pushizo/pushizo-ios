@@ -1,10 +1,10 @@
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 /// Ortak vektörler (`sdk/testdata/messaging-vectors.json`): Android `HsMessagingVectorsTest` aynı dosyayı kullanır.
 final class HSMessagingVectorsTests: XCTestCase {
     private static let vectors: [String: Any] = {
-        // Tests/HeroSignalTests/<dosya> → sdk/testdata
+        // Tests/PushizoTests/<dosya> → sdk/testdata
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("testdata/messaging-vectors.json")

@@ -1,5 +1,5 @@
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 /// Hücre sunucularını taklit eder: `https://global.test` 421 `HS_WRONG_CELL` döner, diğer kökler 200.
 /// `loop` açıkken her kök diğerini gösterir (döngü koruması testi).
@@ -50,7 +50,7 @@ private final class CellURLProtocol: URLProtocol {
 /// dosyayı kullanır) ve 421 `HS_WRONG_CELL` yeniden denemesi.
 final class HSCellRoutingTests: XCTestCase {
     private func vectors() throws -> [String: Any] {
-        // Tests/HeroSignalTests/<dosya> → sdk/testdata
+        // Tests/PushizoTests/<dosya> → sdk/testdata
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("testdata/cell-routing-vectors.json")
@@ -81,7 +81,7 @@ final class HSCellRoutingTests: XCTestCase {
     }
 
     func testInitialBaseUsesSavedRegionalRootForSameSeed() {
-        let seed = "https://api.herosignal.dev"
+        let seed = "https://api.pushizo.com"
         XCTAssertEqual(HSCellRouting.initialBase(seed: seed + "/", savedSeed: seed, savedUrl: "https://api.eu.test"), "https://api.eu.test")
         XCTAssertEqual(HSCellRouting.initialBase(seed: "https://other.test", savedSeed: seed, savedUrl: "https://api.eu.test"), "https://other.test")
         XCTAssertEqual(HSCellRouting.initialBase(seed: seed, savedSeed: seed, savedUrl: "http://evil.test"), seed)
@@ -139,9 +139,9 @@ final class HSCellRoutingTests: XCTestCase {
         let suite = "hs.tests.cell.\(UUID().uuidString)"
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         let storage = HSStorage(appId: "app_1", appGroup: suite)
-        XCTAssertEqual(storage.resolvedApiUrl(seed: "https://api.herosignal.dev"), "https://api.herosignal.dev")
-        storage.saveRegionalApi(seed: "https://api.herosignal.dev/", url: "https://api.eu.test")
-        XCTAssertEqual(storage.resolvedApiUrl(seed: "https://api.herosignal.dev"), "https://api.eu.test")
+        XCTAssertEqual(storage.resolvedApiUrl(seed: "https://api.pushizo.com"), "https://api.pushizo.com")
+        storage.saveRegionalApi(seed: "https://api.pushizo.com/", url: "https://api.eu.test")
+        XCTAssertEqual(storage.resolvedApiUrl(seed: "https://api.pushizo.com"), "https://api.eu.test")
         XCTAssertEqual(storage.resolvedApiUrl(seed: "https://proxy.example.com"), "https://proxy.example.com")
     }
 }

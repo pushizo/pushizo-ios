@@ -1,8 +1,8 @@
 import Foundation
-// SPM: ayrı modül; CocoaPods alt spec'leri tek "HeroSignal" modülünde derlenir. Çekirdek tipler yeniden dışa aktarılır:
-// widget extension `import HeroSignalExtension` ile Live Activity tiplerine (`HeroSignalActivityData` vb.) erişir.
-#if canImport(HeroSignalCore)
-@_exported import HeroSignalCore
+// SPM: ayrı modül; CocoaPods alt spec'leri tek "Pushizo" modülünde derlenir. Çekirdek tipler yeniden dışa aktarılır:
+// widget extension `import PushizoExtension` ile Live Activity tiplerine (`PushizoActivityData` vb.) erişir.
+#if canImport(PushizoCore)
+@_exported import PushizoCore
 #endif
 import UserNotifications
 
@@ -13,14 +13,14 @@ import UserNotifications
 
  ```swift
  class NotificationService: UNNotificationServiceExtension {
-   let hs = HeroSignalNotificationServiceExtension(appId: "app_…", apiUrl: "https://api.example.com", appGroup: "group.com.example.app")
+   let hs = PushizoNotificationServiceExtension(appId: "app_…", apiUrl: "https://api.example.com", appGroup: "group.com.example.app")
    override func didReceive(_ request: UNNotificationRequest, withContentHandler handler: @escaping (UNNotificationContent) -> Void) {
      hs.didReceive(request, withContentHandler: handler)
    }
    override func serviceExtensionTimeWillExpire() { hs.serviceExtensionTimeWillExpire() }
  }
  ```
- App Group verilmezse Info.plist `HeroSignalAppGroup` anahtarı, o da yoksa `group.<uygulama bundle id>.herosignal` kullanılır
+ App Group verilmezse Info.plist `PushizoAppGroup` anahtarı, o da yoksa `group.<uygulama bundle id>.pushizo` kullanılır
  (rozet sayacının uygulama ile paylaşılması için App Group yetkisi her iki hedefte de açık olmalıdır).
 
  Gizlilik onayı: uygulama `requiresPrivacyConsent` ve onay durumunu `appGroup` ile paylaşılan depolamaya yazar; NSE
@@ -28,7 +28,7 @@ import UserNotifications
  onay verilince uygulama gönderir. App Group paylaşılmıyorsa `requiresPrivacyConsent: true` verin (NSE onayı göremediği
  için gönderim yapmaz).
  */
-public final class HeroSignalNotificationServiceExtension {
+public final class PushizoNotificationServiceExtension {
     /// `received` isteği için en uzun bekleme (saniye); dolarsa kayıt `pendingReceived` listesinde kalır, uygulama gönderir.
     public static let receivedTimeout: TimeInterval = 5
     private let api: HSApi

@@ -1,5 +1,5 @@
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 final class HSSessionTrackerTests: XCTestCase {
     private var suiteName = ""

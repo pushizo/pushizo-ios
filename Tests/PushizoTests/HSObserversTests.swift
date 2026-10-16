@@ -1,6 +1,6 @@
 import UserNotifications
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 final class HSObserversTests: XCTestCase {
     func testRegistryNotifiesInOrderAndRemovesByToken() {

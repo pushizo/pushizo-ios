@@ -66,7 +66,7 @@ public final class HSApi {
         request.httpMethod = method
         request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("herosignal-ios/\(sdkVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("pushizo-ios/\(sdkVersion)", forHTTPHeaderField: "User-Agent")
         if let jwt = identityToken?(), !jwt.isEmpty {
             request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
         }

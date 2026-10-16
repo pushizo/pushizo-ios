@@ -1,8 +1,8 @@
 import Foundation
-// SPM: ayrı modül (uygulamalar `import HeroSignal` ile çekirdek tiplere de erişsin diye yeniden dışa aktarılır);
-// CocoaPods alt spec'leri tek "HeroSignal" modülünde derlenir.
-#if canImport(HeroSignalCore)
-@_exported import HeroSignalCore
+// SPM: ayrı modül (uygulamalar `import Pushizo` ile çekirdek tiplere de erişsin diye yeniden dışa aktarılır);
+// CocoaPods alt spec'leri tek "Pushizo" modülünde derlenir.
+#if canImport(PushizoCore)
+@_exported import PushizoCore
 #endif
 import UIKit
 import UserNotifications
@@ -47,7 +47,7 @@ public final class HSForegroundEvent {
 
 /// SDK kullanım hataları (bildirim kutusu vb.).
 public enum HSError: Error, Equatable {
-    /// `HeroSignal.initialize` çağrılmadı.
+    /// `Pushizo.initialize` çağrılmadı.
     case notInitialized
     /// Push veya e-posta/SMS aboneliği henüz kaydedilmedi (ya da gizlilik onayı bekleniyor).
     case noSubscription
@@ -76,14 +76,14 @@ public struct HSOptions {
     /// provisioning profilindeki `aps-environment` ile tespit edilir (`device.push_environment`).
     public var apnsEnvironment: String?
     /// NSE ile durum paylaşımı için App Group (ör. "group.com.example.app"). Rozet sayacı için verilmezse
-    /// Info.plist `HeroSignalAppGroup`, o da yoksa `group.<bundle id>.herosignal` kullanılır.
+    /// Info.plist `PushizoAppGroup`, o da yoksa `group.<bundle id>.pushizo` kullanılır.
     public var appGroup: String?
     /// Provisional (sessiz) izin ile başla.
     public var provisionalAuthorization = false
     /**
      true (varsayılan): SDK `UNUserNotificationCenter.current().delegate` olarak kendi delegesini atar; önceki delege zayıf
-     referansla tutulur ve HeroSignal dışı bildirimler ona iletilir. false: delegeyi uygulama yönetir ve
-     `HeroSignal.Notifications.handleWillPresent` / `handleDidReceive` çağrılarını kendi delegesinden yapar.
+     referansla tutulur ve Pushizo dışı bildirimler ona iletilir. false: delegeyi uygulama yönetir ve
+     `Pushizo.Notifications.handleWillPresent` / `handleDidReceive` çağrılarını kendi delegesinden yapar.
      */
     public var installsNotificationDelegate = true
     public var logLevel: HSLog.Level = .warn
@@ -95,25 +95,25 @@ public enum HSLog {
     public static var level: Level = .warn
     static func log(_ l: Level, _ message: @autoclosure () -> String) {
         guard level.rawValue >= l.rawValue else { return }
-        print("[HeroSignal] \(message())")
+        print("[Pushizo] \(message())")
     }
 }
 
 /**
- HeroSignal iOS SDK (eski sağlayıcı v5 yüzeyiyle uyumlu).
+ Pushizo iOS SDK (eski sağlayıcı v5 yüzeyiyle uyumlu).
 
  ```swift
- HeroSignal.initialize("app_…", launchOptions: launchOptions) { $0.apiUrl = "https://api.example.com" }
- HeroSignal.Notifications.requestPermission { accepted in }
- let token = HeroSignal.Notifications.addPermissionObserver { granted in }
- HeroSignal.login("user_42")
- HeroSignal.User.addTag("plan", "pro")
- HeroSignal.User.addEmail("ali@example.com")
- HeroSignal.InAppMessages.addTrigger("level", "gold")
- let page = try await HeroSignal.Inbox.list(limit: 20)
+ Pushizo.initialize("app_…", launchOptions: launchOptions) { $0.apiUrl = "https://api.example.com" }
+ Pushizo.Notifications.requestPermission { accepted in }
+ let token = Pushizo.Notifications.addPermissionObserver { granted in }
+ Pushizo.login("user_42")
+ Pushizo.User.addTag("plan", "pro")
+ Pushizo.User.addEmail("ali@example.com")
+ Pushizo.InAppMessages.addTrigger("level", "gold")
+ let page = try await Pushizo.Inbox.list(limit: 20)
  ```
  */
-public enum HeroSignal {
+public enum Pushizo {
     public static let sdkVersion = "0.1.0"
     static var appId = ""
     static var options = HSOptions()
@@ -144,7 +144,7 @@ public enum HeroSignal {
 
     /// Uygulama başlangıcında (AppDelegate `didFinishLaunching` veya SwiftUI `init`) çağrılır.
     public static func initialize(_ appId: String, launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil, configure: ((inout HSOptions) -> Void)? = nil) {
-        precondition(!appId.isEmpty, "HeroSignal.initialize: appId gerekli")
+        precondition(!appId.isEmpty, "Pushizo.initialize: appId gerekli")
         var opts = HSOptions()
         configure?(&opts)
         self.appId = appId
@@ -212,7 +212,7 @@ public enum HeroSignal {
         return HSConsent.allowsNetwork(required: options.requiresPrivacyConsent, given: store.consentGiven)
     }
 
-    /// SDK delegesini atar; önceki delege (uygulamanınki) HeroSignal dışı bildirimler için zayıf referansla saklanır.
+    /// SDK delegesini atar; önceki delege (uygulamanınki) Pushizo dışı bildirimler için zayıf referansla saklanır.
     static func installNotificationDelegate() {
         let center = UNUserNotificationCenter.current()
         guard center.delegate !== delegate else { return }
@@ -1096,8 +1096,8 @@ public enum HeroSignal {
 
         /**
          Delegeyi kendisi yöneten uygulamalar (`HSOptions.installsNotificationDelegate = false`) için: kendi
-         `userNotificationCenter(_:willPresent:withCompletionHandler:)` içinden çağırın. HeroSignal bildirimiyse işlenir,
-         `completion` HeroSignal tarafından tam bir kez çağrılır ve true döner; değilse false döner ve `completion` çağrılmaz
+         `userNotificationCenter(_:willPresent:withCompletionHandler:)` içinden çağırın. Pushizo bildirimiyse işlenir,
+         `completion` Pushizo tarafından tam bir kez çağrılır ve true döner; değilse false döner ve `completion` çağrılmaz
          (karar uygulamanındır).
          */
         @discardableResult
@@ -1106,7 +1106,7 @@ public enum HeroSignal {
         }
 
         /**
-         `userNotificationCenter(_:didReceive:withCompletionHandler:)` içinden çağırın. HeroSignal bildirimiyse tıklama/kapatma
+         `userNotificationCenter(_:didReceive:withCompletionHandler:)` içinden çağırın. Pushizo bildirimiyse tıklama/kapatma
          işlenir, `completion` tam bir kez çağrılır ve true döner; değilse false döner ve `completion` çağrılmaz.
          */
         @discardableResult
@@ -1268,7 +1268,7 @@ public enum HeroSignal {
 }
 
 /**
- UNUserNotificationCenterDelegate: ön plan gösterimi, tıklama → opened + yönlendirme. HeroSignal dışı bildirimler,
+ UNUserNotificationCenterDelegate: ön plan gösterimi, tıklama → opened + yönlendirme. Pushizo dışı bildirimler,
  SDK delegesi atanmadan önceki delegeye (zayıf referans) iletilir; tamamlama bloğu her durumda tam bir kez çağrılır.
  */
 final class HSNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
@@ -1290,19 +1290,19 @@ final class HSNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         completionHandler()
     }
 
-    /// Uygulama içi bildirim ayarları ekranı isteği HeroSignal'i ilgilendirmez; önceki delegeye iletilir.
+    /// Uygulama içi bildirim ayarları ekranı isteği Pushizo'yu ilgilendirmez; önceki delegeye iletilir.
     func userNotificationCenter(_ center: UNUserNotificationCenter, openSettingsFor notification: UNNotification?) {
         previous?.userNotificationCenter?(center, openSettingsFor: notification)
     }
 
-    /// HeroSignal bildirimiyse ön plan kararını verir (tamamlama tam bir kez) ve true döner; değilse dokunmaz.
+    /// Pushizo bildirimiyse ön plan kararını verir (tamamlama tam bir kez) ve true döner; değilse dokunmaz.
     func handleWillPresent(_ notification: UNNotification, completion: @escaping (UNNotificationPresentationOptions) -> Void) -> Bool {
         guard let n = HSNotification(userInfo: notification.request.content.userInfo) else { return false }
-        if let id = n.deliveryId { HeroSignal.reportReceived(id) }
+        if let id = n.deliveryId { Pushizo.reportReceived(id) }
         let event = HSForegroundEvent(notification: n) { show in
             completion(show ? [.banner, .sound, .badge, .list] : [])
         }
-        HeroSignal.foregroundListeners.notify(event)
+        Pushizo.foregroundListeners.notify(event)
         if !event.prevented {
             event.complete(true)
         } else {
@@ -1312,16 +1312,16 @@ final class HSNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         return true
     }
 
-    /// HeroSignal bildirimiyse tıklama/kapatmayı işler, tamamlamayı çağırır ve true döner; değilse dokunmaz.
+    /// Pushizo bildirimiyse tıklama/kapatmayı işler, tamamlamayı çağırır ve true döner; değilse dokunmaz.
     func handleDidReceive(_ response: UNNotificationResponse, completion: @escaping () -> Void) -> Bool {
         guard let n = HSNotification(userInfo: response.notification.request.content.userInfo) else { return false }
         switch response.actionIdentifier {
         case UNNotificationDismissActionIdentifier:
-            HeroSignal.reportDismissed(n)
+            Pushizo.reportDismissed(n)
         case UNNotificationDefaultActionIdentifier:
-            HeroSignal.reportOpened(n, actionId: nil)
+            Pushizo.reportOpened(n, actionId: nil)
         default:
-            HeroSignal.reportOpened(n, actionId: response.actionIdentifier)
+            Pushizo.reportOpened(n, actionId: response.actionIdentifier)
         }
         completion()
         return true

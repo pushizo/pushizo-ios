@@ -2,7 +2,7 @@ import Foundation
 
 /**
  Konum paylaşımının CoreLocation'dan bağımsız kuralları (v2 Faz 17b; birim testli). Konum yalnızca kullanıcı paylaşımı
- açtıysa (`HeroSignal.Location.setShared(true)`), gizlilik onayı varsa (veya gerekmiyorsa), konum izni verilmişse ve
+ açtıysa (`Pushizo.Location.setShared(true)`), gizlilik onayı varsa (veya gerekmiyorsa), konum izni verilmişse ve
  uygulama ön plandaysa en sık `minInterval` aralıkla toplanır. Gönderim `PATCH /subscriptions/{id}` gövdesindeki
  `location` alanıyla, kalıcı kuyruk üzerinden yapılır; kapatmada `location: null` gider ve sunucu konumu ile KVKK rıza
  kaydını hemen siler. İlk konum gönderimi sunucuda açık rıza kaydı sayılır.

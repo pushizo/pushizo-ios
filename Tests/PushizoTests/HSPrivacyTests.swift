@@ -1,5 +1,5 @@
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 /// Gizlilik onayı, NSE `received` kalıcılığı, olay sahiplik kanıtı ve cihaz bilgisi.
 final class HSPrivacyTests: XCTestCase {

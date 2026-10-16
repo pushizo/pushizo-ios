@@ -1,5 +1,5 @@
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 /// İstekleri ağa çıkarmadan yakalar (gövde `httpBodyStream` ile de okunur) ve boş JSON yanıtı döner.
 private final class LiveActivityURLProtocol: URLProtocol {
@@ -65,7 +65,7 @@ final class HSLiveActivitiesTests: XCTestCase {
 
     func testActivityTypeAndIdRulesMatchServer() {
         XCTAssertTrue(HSLiveActivities.isValidActivityType("DeliveryAttributes"))
-        XCTAssertTrue(HSLiveActivities.isValidActivityType(HeroSignalDefaultLiveActivityAttributes.activityType))
+        XCTAssertTrue(HSLiveActivities.isValidActivityType(PushizoDefaultLiveActivityAttributes.activityType))
         XCTAssertFalse(HSLiveActivities.isValidActivityType("Generic<Int>"))
         XCTAssertFalse(HSLiveActivities.isValidActivityType("1Attributes"))
         XCTAssertTrue(HSLiveActivities.isValidActivityId("order_42:v1.2-x"))
@@ -76,71 +76,71 @@ final class HSLiveActivitiesTests: XCTestCase {
     }
 
     func testDefaultTypeNameEqualsSwiftTypeName() {
-        XCTAssertEqual(String(describing: HeroSignalDefaultLiveActivityAttributes.self), HeroSignalDefaultLiveActivityAttributes.activityType)
+        XCTAssertEqual(String(describing: PushizoDefaultLiveActivityAttributes.self), PushizoDefaultLiveActivityAttributes.activityType)
     }
 
     func testActivityDataUsesSnakeCaseKey() throws {
-        let data = try JSONEncoder().encode(HeroSignalActivityData(activityId: "lac_1"))
+        let data = try JSONEncoder().encode(PushizoActivityData(activityId: "lac_1"))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(json as? [String: String], ["activity_id": "lac_1"])
-        let decoded = try JSONDecoder().decode(HeroSignalActivityData.self, from: Data(#"{"activity_id":"lac_2"}"#.utf8))
+        let decoded = try JSONDecoder().decode(PushizoActivityData.self, from: Data(#"{"activity_id":"lac_2"}"#.utf8))
         XCTAssertEqual(decoded.activityId, "lac_2")
     }
 
     func testDefaultAttributesDecodeServerStartPayload() throws {
-        // packages/render: start payload'ındaki `attributes` düz nesnedir ve `herosignal.activity_id` içerir.
-        let json = #"{"title":"Sipariş #42","items":3,"express":true,"price":12.5,"nested":{"x":1},"empty":null,"herosignal":{"activity_id":"lac_9"}}"#
-        let attributes = try JSONDecoder().decode(HeroSignalDefaultLiveActivityAttributes.self, from: Data(json.utf8))
-        XCTAssertEqual(attributes.herosignal, HeroSignalActivityData(activityId: "lac_9"))
+        // packages/render: start payload'ındaki `attributes` düz nesnedir ve `pushizo.activity_id` içerir.
+        let json = #"{"title":"Sipariş #42","items":3,"express":true,"price":12.5,"nested":{"x":1},"empty":null,"pushizo":{"activity_id":"lac_9"}}"#
+        let attributes = try JSONDecoder().decode(PushizoDefaultLiveActivityAttributes.self, from: Data(json.utf8))
+        XCTAssertEqual(attributes.pushizo, PushizoActivityData(activityId: "lac_9"))
         XCTAssertEqual(attributes.data["title"], .string("Sipariş #42"))
         XCTAssertEqual(attributes.data["items"]?.intValue, 3)
         XCTAssertEqual(attributes.data["express"], .bool(true))
         XCTAssertEqual(attributes.data["price"]?.doubleValue, 12.5)
-        XCTAssertNil(attributes.data["herosignal"], "herosignal veri alanı değildir")
+        XCTAssertNil(attributes.data["pushizo"], "pushizo veri alanı değildir")
         XCTAssertNil(attributes.data["nested"], "ilkel olmayan değer atlanır")
         XCTAssertNil(attributes.data["empty"])
         XCTAssertEqual(attributes.data["items"]?.description, "3")
 
-        // Bozuk herosignal alanı etkinliği düşürmez.
-        let broken = try JSONDecoder().decode(HeroSignalDefaultLiveActivityAttributes.self, from: Data(#"{"title":"x","herosignal":"y"}"#.utf8))
-        XCTAssertNil(broken.herosignal)
+        // Bozuk pushizo alanı etkinliği düşürmez.
+        let broken = try JSONDecoder().decode(PushizoDefaultLiveActivityAttributes.self, from: Data(#"{"title":"x","pushizo":"y"}"#.utf8))
+        XCTAssertNil(broken.pushizo)
         XCTAssertEqual(broken.data["title"], .string("x"))
     }
 
     func testDefaultAttributesRoundTrip() throws {
-        let original = HeroSignalDefaultLiveActivityAttributes(data: ["title": .string("Maç"), "home": .number(2)], herosignal: HeroSignalActivityData(activityId: "match_1"))
+        let original = PushizoDefaultLiveActivityAttributes(data: ["title": .string("Maç"), "home": .number(2)], pushizo: PushizoActivityData(activityId: "match_1"))
         let encoded = try JSONEncoder().encode(original)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         XCTAssertEqual(json["title"] as? String, "Maç")
-        XCTAssertEqual((json["herosignal"] as? [String: Any])?["activity_id"] as? String, "match_1")
-        let decoded = try JSONDecoder().decode(HeroSignalDefaultLiveActivityAttributes.self, from: encoded)
+        XCTAssertEqual((json["pushizo"] as? [String: Any])?["activity_id"] as? String, "match_1")
+        let decoded = try JSONDecoder().decode(PushizoDefaultLiveActivityAttributes.self, from: encoded)
         XCTAssertEqual(decoded.data, original.data)
-        XCTAssertEqual(decoded.herosignal, original.herosignal)
+        XCTAssertEqual(decoded.pushizo, original.pushizo)
 
-        let state = HeroSignalDefaultLiveActivityAttributes.ContentState(data: ["status": .string("Yolda"), "eta": .number(12), "late": .bool(false)])
+        let state = PushizoDefaultLiveActivityAttributes.ContentState(data: ["status": .string("Yolda"), "eta": .number(12), "late": .bool(false)])
         let stateJson = try XCTUnwrap(JSONSerialization.jsonObject(with: try JSONEncoder().encode(state)) as? [String: Any])
         XCTAssertEqual(stateJson["status"] as? String, "Yolda")
         XCTAssertEqual(stateJson["late"] as? Bool, false)
-        let decodedState = try JSONDecoder().decode(HeroSignalDefaultLiveActivityAttributes.ContentState.self, from: Data(#"{"status":"Yolda","eta":12,"late":false}"#.utf8))
+        let decodedState = try JSONDecoder().decode(PushizoDefaultLiveActivityAttributes.ContentState.self, from: Data(#"{"status":"Yolda","eta":12,"late":false}"#.utf8))
         XCTAssertEqual(decodedState, state)
     }
 
     func testBridgeValuesAreValidated() {
-        let values = HeroSignalLiveActivityValue.dictionary(from: ["s": "x", "i": 3, "d": 2.5, "b": true, "n": NSNumber(value: 0)] as [String: Any])
+        let values = PushizoLiveActivityValue.dictionary(from: ["s": "x", "i": 3, "d": 2.5, "b": true, "n": NSNumber(value: 0)] as [String: Any])
         XCTAssertEqual(values?["s"], .string("x"))
         XCTAssertEqual(values?["i"], .number(3))
         XCTAssertEqual(values?["d"], .number(2.5))
         XCTAssertEqual(values?["b"], .bool(true), "Bool sayıya dönüşmez")
         XCTAssertEqual(values?["n"], .number(0), "0 sayısı Bool'a dönüşmez")
-        XCTAssertEqual(HeroSignalLiveActivityValue.dictionary(from: nil), [:])
-        XCTAssertNil(HeroSignalLiveActivityValue.dictionary(from: ["o": ["x": 1]] as [String: Any]), "iç içe nesne reddedilir")
-        XCTAssertNil(HeroSignalLiveActivityValue.dictionary(from: ["a": [1, 2]] as [String: Any]))
-        XCTAssertNil(HeroSignalLiveActivityValue.dictionary(from: ["x": NSNull()] as [String: Any]))
-        XCTAssertNil(HeroSignalLiveActivityValue.dictionary(from: ["x": Double.nan] as [String: Any]))
-        XCTAssertNil(HeroSignalLiveActivityValue.dictionary(from: ["": "x"] as [String: Any]), "boş anahtar")
-        XCTAssertNil(HeroSignalLiveActivityValue.dictionary(from: [String(repeating: "k", count: 65): "x"] as [String: Any]))
-        XCTAssertNil(HeroSignalLiveActivityValue.dictionary(from: ["t": String(repeating: "x", count: 4001)] as [String: Any]))
-        XCTAssertNil(HeroSignalLiveActivityValue.dictionary(from: "metin"))
+        XCTAssertEqual(PushizoLiveActivityValue.dictionary(from: nil), [:])
+        XCTAssertNil(PushizoLiveActivityValue.dictionary(from: ["o": ["x": 1]] as [String: Any]), "iç içe nesne reddedilir")
+        XCTAssertNil(PushizoLiveActivityValue.dictionary(from: ["a": [1, 2]] as [String: Any]))
+        XCTAssertNil(PushizoLiveActivityValue.dictionary(from: ["x": NSNull()] as [String: Any]))
+        XCTAssertNil(PushizoLiveActivityValue.dictionary(from: ["x": Double.nan] as [String: Any]))
+        XCTAssertNil(PushizoLiveActivityValue.dictionary(from: ["": "x"] as [String: Any]), "boş anahtar")
+        XCTAssertNil(PushizoLiveActivityValue.dictionary(from: [String(repeating: "k", count: 65): "x"] as [String: Any]))
+        XCTAssertNil(PushizoLiveActivityValue.dictionary(from: ["t": String(repeating: "x", count: 4001)] as [String: Any]))
+        XCTAssertNil(PushizoLiveActivityValue.dictionary(from: "metin"))
     }
 
     func testOperationsAndRequestBodiesCarryOwnershipProof() throws {
@@ -215,7 +215,7 @@ final class HSLiveActivitiesTests: XCTestCase {
         let api = HSApi(apiUrl: "https://api.example.test", appId: "app_1", sdkVersion: "test", session: URLSession(configuration: configuration))
         api.identityToken = { "a.b.c" }
 
-        let op = HSLiveActivities.tokenOperation(activityType: HeroSignalDefaultLiveActivityAttributes.activityType, kind: .update, activityId: "order_42", token: laToken)
+        let op = HSLiveActivities.tokenOperation(activityType: PushizoDefaultLiveActivityAttributes.activityType, kind: .update, activityId: "order_42", token: laToken)
         let request = try XCTUnwrap(HSLiveActivities.request(for: op, subscriptionId: "sub_1", registeredToken: pushToken, identityHash: nil))
         let response = try await api.request("POST", request.path, body: request.body)
         XCTAssertEqual(response["ok"] as? Bool, true)
@@ -226,7 +226,7 @@ final class HSLiveActivitiesTests: XCTestCase {
         XCTAssertEqual(captured.request.value(forHTTPHeaderField: "Authorization"), "Bearer a.b.c")
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(captured.body)) as? [String: Any])
         XCTAssertEqual(body["subscription_id"] as? String, "sub_1")
-        XCTAssertEqual(body["activity_type"] as? String, "HeroSignalDefaultLiveActivityAttributes")
+        XCTAssertEqual(body["activity_type"] as? String, "PushizoDefaultLiveActivityAttributes")
         XCTAssertEqual(body["kind"] as? String, "update")
         XCTAssertEqual(body["activity_id"] as? String, "order_42")
         XCTAssertEqual(body["token"] as? String, laToken)

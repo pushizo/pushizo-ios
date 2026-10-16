@@ -1,5 +1,5 @@
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 /// v2 Faz 17b — konum paylaşımı kuralları: aralık, doğrulama, kuyruk işlemi ve PATCH gövdesi.
 final class HSLocationRulesTests: XCTestCase {

@@ -1,7 +1,7 @@
 import Foundation
-// SPM: ayrı modül; CocoaPods alt spec'leri tek "HeroSignal" modülünde derlenir.
-#if canImport(HeroSignalCore)
-import HeroSignalCore
+// SPM: ayrı modül; CocoaPods alt spec'leri tek "Pushizo" modülünde derlenir.
+#if canImport(PushizoCore)
+import PushizoCore
 #endif
 import UIKit
 import WebKit
@@ -15,7 +15,7 @@ import WebKit
  - `websiteDataStore = .nonPersistent()` (çerez/depolama kalıcı değil), JavaScript pencere açamaz.
  - `WKNavigationDelegate`: `loadHTMLString(baseURL: nil)` ile yapılan ilk yükleme (`about:blank`) dışında her gezinme
    iptal edilir (bağlantılar köprü üzerinden `click` olur). `WKUIDelegate` yeni pencere ve JS diyaloglarını reddeder.
- - Uygulamaya yalnızca `heroSignalBridge` ileti işleyicisi açıktır; mesaj ana çerçeveden gelmeli ve `HSHtmlBridge` ile
+ - Uygulamaya yalnızca `pushizoBridge` ileti işleyicisi açıktır; mesaj ana çerçeveden gelmeli ve `HSHtmlBridge` ile
    (işaret, sürüm, gösterime özel nonce, şema) doğrulanmalıdır.
  */
 @MainActor
@@ -119,7 +119,7 @@ final class HSHtmlInAppView: NSObject, WKNavigationDelegate, WKUIDelegate, WKScr
 
     // MARK: İçerik kural listesi
 
-    private static let ruleListIdentifier = "HeroSignalHtmlInApp-v1"
+    private static let ruleListIdentifier = "PushizoHtmlInApp-v1"
     /// Önce her şeyi (ana belge hariç alt kaynaklar) engelle, sonra https/data görsellere izin ver.
     private static let ruleListJson = """
     [

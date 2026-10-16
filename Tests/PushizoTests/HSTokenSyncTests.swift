@@ -1,6 +1,6 @@
 import UserNotifications
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 /// Sahte istekçi: çağrıları kaydeder, yanıtı işleyiciden alır.
 private final class FakeRequester {

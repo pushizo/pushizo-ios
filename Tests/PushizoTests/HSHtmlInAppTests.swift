@@ -1,11 +1,11 @@
 import XCTest
-@testable import HeroSignalCore
+@testable import PushizoCore
 
 /// HTML in-app köprüsü ortak vektörleri (`sdk/testdata/html-bridge-vectors.json`; Web ve Android aynı dosyayı kullanır)
 /// ile HTML/carousel ayrıştırma testleri.
 final class HSHtmlInAppTests: XCTestCase {
     private static let vectors: [String: Any] = {
-        // Tests/HeroSignalTests/<dosya> → sdk/testdata
+        // Tests/PushizoTests/<dosya> → sdk/testdata
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("testdata/html-bridge-vectors.json")
@@ -63,16 +63,16 @@ final class HSHtmlInAppTests: XCTestCase {
         XCTAssertNil(HSHtmlBridge.parse(json: "bozuk", nonce: nonce))
         XCTAssertNil(HSHtmlBridge.parse(json: "[1,2]", nonce: nonce))
         let pad = String(repeating: "x", count: HSHtmlBridge.maxMessageLength)
-        XCTAssertNil(HSHtmlBridge.parse(json: #"{"hs":"herosignal-bridge","v":1,"nonce":"nonce-12345","type":"close","pad":"\#(pad)"}"#, nonce: nonce))
+        XCTAssertNil(HSHtmlBridge.parse(json: #"{"hs":"pushizo-bridge","v":1,"nonce":"nonce-12345","type":"close","pad":"\#(pad)"}"#, nonce: nonce))
         // Sürüm metin veya mantıksal değer olarak gelirse reddedilir; dizi özellik reddedilir.
-        XCTAssertNil(HSHtmlBridge.parse(json: #"{"hs":"herosignal-bridge","v":"1","nonce":"nonce-12345","type":"close"}"#, nonce: nonce))
-        XCTAssertNil(HSHtmlBridge.parse(json: #"{"hs":"herosignal-bridge","v":true,"nonce":"nonce-12345","type":"close"}"#, nonce: nonce))
-        XCTAssertNil(HSHtmlBridge.parse(json: #"{"hs":"herosignal-bridge","v":1,"nonce":"nonce-12345","type":"track_event","name":"x","props":[1]}"#, nonce: nonce))
+        XCTAssertNil(HSHtmlBridge.parse(json: #"{"hs":"pushizo-bridge","v":"1","nonce":"nonce-12345","type":"close"}"#, nonce: nonce))
+        XCTAssertNil(HSHtmlBridge.parse(json: #"{"hs":"pushizo-bridge","v":true,"nonce":"nonce-12345","type":"close"}"#, nonce: nonce))
+        XCTAssertNil(HSHtmlBridge.parse(json: #"{"hs":"pushizo-bridge","v":1,"nonce":"nonce-12345","type":"track_event","name":"x","props":[1]}"#, nonce: nonce))
         // Satır sonu eklenmiş eylem kimliği reddedilir (JavaScript `$` gibi tam eşleşme).
-        XCTAssertNil(HSHtmlBridge.parse(json: #"{"hs":"herosignal-bridge","v":1,"nonce":"nonce-12345","type":"click","action_id":"buy\n"}"#, nonce: nonce))
+        XCTAssertNil(HSHtmlBridge.parse(json: #"{"hs":"pushizo-bridge","v":1,"nonce":"nonce-12345","type":"click","action_id":"buy\n"}"#, nonce: nonce))
         // Uzun metin özellik 255 UTF-16 birimine kırpılır.
         let long = String(repeating: "a", count: 300)
-        let event = HSHtmlBridge.parse(json: #"{"hs":"herosignal-bridge","v":1,"nonce":"nonce-12345","type":"track_event","name":"x","props":{"s":"\#(long)"}}"#, nonce: nonce)
+        let event = HSHtmlBridge.parse(json: #"{"hs":"pushizo-bridge","v":1,"nonce":"nonce-12345","type":"track_event","name":"x","props":{"s":"\#(long)"}}"#, nonce: nonce)
         XCTAssertEqual(event, .trackEvent(name: "x", props: ["s": .string(String(repeating: "a", count: 255))]))
     }
 
@@ -86,7 +86,7 @@ final class HSHtmlInAppTests: XCTestCase {
         XCTAssertLessThan(csp.lowerBound, content.lowerBound)
         XCTAssertLessThan(script.lowerBound, content.lowerBound)
         XCTAssertTrue(doc.contains("var N=\"\(nonce)\""))
-        XCTAssertTrue(doc.contains("W.messageHandlers.heroSignalBridge"))
+        XCTAssertTrue(doc.contains("W.messageHandlers.pushizoBridge"))
         XCTAssertTrue(doc.contains("P.postMessage(JSON.stringify(m))"))
         XCTAssertFalse(doc.contains("window.parent"))
         XCTAssertTrue(doc.hasSuffix("</body></html>"))

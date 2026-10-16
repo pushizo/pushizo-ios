@@ -7,7 +7,7 @@ public enum HSCellRouting {
     public static let wrongCellStatus = 421
     public static let wrongCellCode = "HS_WRONG_CELL"
     /// Varsayılan (global) API kökü: `HSOptions.apiUrl` bu değerdeyse config `api_url` benimsenir.
-    public static let defaultApiUrl = "https://api.herosignal.dev"
+    public static let defaultApiUrl = "https://api.pushizo.com"
 
     public static func trimSlash(_ value: String) -> String {
         var result = value

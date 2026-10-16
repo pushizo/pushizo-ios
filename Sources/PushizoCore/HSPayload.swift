@@ -15,7 +15,7 @@ public struct HSAction: Equatable {
     }
 }
 
-/// APNs payload'ından ayrıştırılan HeroSignal bildirimi (`aps` + `hs` alanları).
+/// APNs payload'ından ayrıştırılan Pushizo bildirimi (`aps` + `hs` alanları).
 public struct HSNotification: Equatable {
     public let title: String?
     public let body: String?
@@ -30,7 +30,7 @@ public struct HSNotification: Equatable {
     /// `aps.badge`: rozetin ayarlanacağı değer (SetTo).
     public let badgeSet: Int?
 
-    /// `userInfo` sözlüğünden ayrıştırır; HeroSignal dışı payload'larda nil döner.
+    /// `userInfo` sözlüğünden ayrıştırır; Pushizo dışı payload'larda nil döner.
     /// Yeni biçim `hs.dlv`/`hs.msg`/`hs.buttons`; eski `delivery_id`/`message_id`/`actions` alanlarına geri düşer.
     public init?(userInfo: [AnyHashable: Any]) {
         let aps = userInfo["aps"] as? [String: Any] ?? [:]

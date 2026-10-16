@@ -1,11 +1,11 @@
 import Foundation
-#if canImport(HeroSignalCore)
-import HeroSignalCore
+#if canImport(PushizoCore)
+import PushizoCore
 #endif
 import CoreLocation
 import UIKit
 
-extension HeroSignal {
+extension Pushizo {
     /**
      Konum paylaşımı (v2 Faz 17b; yalnızca ön plan, arka plan konumu yok). Paylaşım açıkken konum oturum başında ve
      uygulama ön plana döndüğünde en sık 5 dakikada bir push aboneliğine yazılır (`PATCH /subscriptions/{id}` `location`).
@@ -16,8 +16,8 @@ extension HeroSignal {
      istemez). iOS, iPadOS ve Mac Catalyst'te çalışır.
 
      ```swift
-     HeroSignal.Location.requestPermission(rationale: "Yakındaki mağazaları göstermek için konumunuzu kullanırız.") { granted in
-         if granted { HeroSignal.Location.setShared(true) }
+     Pushizo.Location.requestPermission(rationale: "Yakındaki mağazaları göstermek için konumunuzu kullanırız.") { granted in
+         if granted { Pushizo.Location.setShared(true) }
      }
      ```
      */
@@ -28,7 +28,7 @@ extension HeroSignal {
         /// Paylaşımı açar/kapatır. Açılırken izin varsa konum hemen gönderilir; kapatılınca `location: null` gönderilir.
         public static func setShared(_ shared: Bool) {
             guard let store = storage else {
-                HSLog.log(.error, "Location.setShared: önce HeroSignal.initialize çağrılmalı")
+                HSLog.log(.error, "Location.setShared: önce Pushizo.initialize çağrılmalı")
                 return
             }
             let wasShared = store.locationShared
@@ -105,13 +105,13 @@ final class HSLocationController: NSObject, CLLocationManagerDelegate {
     }
 
     private func refreshOnMain(force: Bool) {
-        guard let store = HeroSignal.storage, store.locationShared else { return }
+        guard let store = Pushizo.storage, store.locationShared else { return }
         // Yalnızca ön plan: arka planda (sessiz push ile uyanma vb.) konum okunmaz.
         guard UIApplication.shared.applicationState != .background else { return }
         let granted = Self.isGranted(locationManager().authorizationStatus)
         guard HSLocationRules.isDue(
             shared: store.locationShared,
-            networkAllowed: HeroSignal.networkAllowed,
+            networkAllowed: Pushizo.networkAllowed,
             permissionGranted: granted,
             lastSentAt: store.locationLastSentAt,
             now: Date().timeIntervalSince1970,
@@ -180,7 +180,7 @@ final class HSLocationController: NSObject, CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         fetching = false
         guard let location = locations.last(where: { $0.horizontalAccuracy >= 0 }) else { return }
-        HeroSignal.Location.send(
+        Pushizo.Location.send(
             latitude: location.coordinate.latitude,
             longitude: location.coordinate.longitude,
             accuracy: location.horizontalAccuracy

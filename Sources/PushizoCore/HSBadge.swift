@@ -3,11 +3,11 @@ import UserNotifications
 
 /// Uygulama ile Notification Service Extension arasında paylaşılan App Group çözümü.
 public enum HSAppGroup {
-    /// Info.plist anahtarı: uygulama ve NSE Info.plist'lerine aynı değer yazılır (ör. "group.com.example.app.herosignal").
-    public static let infoPlistKey = "HeroSignalAppGroup"
+    /// Info.plist anahtarı: uygulama ve NSE Info.plist'lerine aynı değer yazılır (ör. "group.com.example.app.pushizo").
+    public static let infoPlistKey = "PushizoAppGroup"
 
     /**
-     Öncelik: açık parametre → Info.plist `HeroSignalAppGroup` → kural gereği `group.<uygulama bundle id>.herosignal`.
+     Öncelik: açık parametre → Info.plist `PushizoAppGroup` → kural gereği `group.<uygulama bundle id>.pushizo`.
      NSE içinde uygulama bundle id'si, extension bundle id'sinin son bileşeni atılarak bulunur.
      */
     public static func resolve(_ explicit: String?, bundle: Bundle = .main) -> String? {
@@ -17,7 +17,7 @@ public enum HSAppGroup {
         if bundle.bundleURL.pathExtension == "appex", let dot = bundleId.lastIndex(of: ".") {
             bundleId = String(bundleId[..<dot])
         }
-        return "group.\(bundleId).herosignal"
+        return "group.\(bundleId).pushizo"
     }
 }
 
@@ -61,7 +61,7 @@ public final class HSBadgeStore {
 
 /// Dinamik bildirim kategorileri (aksiyon düğmeleri).
 public enum HSCategories {
-    /// Düğmesiz HeroSignal bildirimlerinin kategorisi (yalnızca kapatma geri bildirimi için).
+    /// Düğmesiz Pushizo bildirimlerinin kategorisi (yalnızca kapatma geri bildirimi için).
     public static let defaultIdentifier = "hs_default"
 
     /// Düğme kimliklerinden kararlı kategori kimliği.

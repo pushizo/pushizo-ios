@@ -200,6 +200,7 @@ public enum Pushizo {
             queue?.clear()
             _ = store.takePendingReceived()
             store.clearIdentity()
+            Chat.onLogout()
             // Onay yeniden verildiğinde konum paylaşımı kendiliğinden sürmez (yeniden `Location.setShared(true)` gerekir).
             store.locationShared = false
             store.locationLastSentAt = nil
@@ -349,6 +350,8 @@ public enum Pushizo {
             }
             notifySubscription()
             await flushQueue()
+            // Push aboneliği/token değişti: sohbet ziyaretçisinin abonelik bağı (çevrimdışı mesaj bildirimi) yenilenir.
+            Chat.onIdentityChanged()
         } catch {
             HSLog.log(.warn, "abonelik kaydı başarısız: \(error)")
             reportError("registration_failed", "push aboneliği kaydedilemedi", error: error)
@@ -559,6 +562,14 @@ public enum Pushizo {
             var query = ""
             if let hash = store.userIdentityHash?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) { query = "?identity_hash=\(hash)" }
             try await api.request("DELETE", "/users/\(userId)/identity/\(label)\(query)")
+        case HSAdsRules.operationType:
+            // Son reklam kimliği işlemi kazanır; kayıtlı push aboneliği yoksa silinecek kimlik de yoktur.
+            if HSAdsRules.isSuperseded(op, queue: queue?.items ?? []) { return }
+            guard let subId = store.subscriptionId else {
+                if op["clear"] as? Bool == true { return }
+                throw HSQueueDeferred("push aboneliği yok")
+            }
+            try await api.request("PATCH", "/subscriptions/\(subId)", body: HSAdsRules.body(for: op, registeredToken: store.registeredToken))
         case HSLocationRules.operationType:
             // Daha yeni bir konum işlemi kuyruktaysa bu atlanır (son durum kazanır).
             if HSLocationRules.isSuperseded(op, queue: queue?.items ?? []) { return }
@@ -603,6 +614,9 @@ public enum Pushizo {
             var body: [String: Any] = [:]
             if let button = op["button_id"] as? String, !button.isEmpty { body["button_id"] = button }
             try await api.request("POST", "/deliveries/\(op["delivery_id"] ?? "")/opened", body: body)
+        case Chat.sendOperation, Chat.offlineOperation:
+            // Canlı sohbet: çevrimdışıyken kuyruğa alınan mesaj aynı `client_message_id` ile gönderilir.
+            try await Chat.performQueued(op)
         default:
             break
         }
@@ -627,6 +641,8 @@ public enum Pushizo {
             inApp.onSessionStart()
             if let click = pendingClick, !clickListeners.isEmpty { pendingClick = nil; clickListeners.notify(click) }
             Task { await flushPendingReceived() }
+            // Arka planda gelen sohbet bildirimleri: okunmamış sayısı yenilenir.
+            Chat.onForeground()
             // Kullanıcı izni Ayarlar'dan değiştirmiş olabilir.
             checkPermissionChange()
             // Ön plana dönüş: paylaşım açıksa konum en sık 5 dakikada bir yenilenir.
@@ -811,10 +827,14 @@ public enum Pushizo {
         inApp.reset()
         inApp.onSubscriptionChanged()
         await flushQueue()
+        // Canlı sohbet ziyaretçisi giriş yapan kullanıcıya bağlanır (sohbet kullanılıyorsa).
+        Chat.onIdentityChanged()
     }
 
     public static func logout() {
         guard let store = storage, api != nil else { return }
+        // Sohbet ziyaretçisi sıfırlanır: cihazı kullanan sonraki kişi önceki sohbeti görmez.
+        Chat.onLogout()
         guard networkAllowed else {
             // Onay bekleniyor: kimlik yerelde silinir; kayıtlı abonelik varsa onay verilince sunucuda da çıkış yapılır.
             let hadSubscription = store.subscriptionId != nil
@@ -984,6 +1004,27 @@ public enum Pushizo {
                 }
                 await MainActor.run { completion?(result) }
             }
+        }
+
+        // MARK: Reklam kişiselleştirme rızası (ADR-0037): tercih ucunda ayrılmış anahtar `ads_personalization`
+
+        /**
+         Kullanıcı e-posta/telefon özetinin reklam platformu kitlelerine gönderilmesine izin verdi mi. `false` rızayı geri
+         alır; kullanıcı bir sonraki kitle senkronunda platformdan çıkarılır.
+         */
+        @discardableResult
+        public static func setAdsPersonalizationConsent(_ granted: Bool) async throws -> HSPreferencesResult {
+            try await setPreferences([HSPreferenceInput(category: HSConsentPurpose.adsPersonalization, optedIn: granted)])
+        }
+
+        /// Geri çağrı sürümü (ObjC/köprüler); sonuç istenmiyorsa `completion` nil.
+        public static func setAdsPersonalizationConsent(_ granted: Bool, _ completion: ((Result<HSPreferencesResult, Error>) -> Void)? = nil) {
+            setPreferences([HSPreferenceInput(category: HSConsentPurpose.adsPersonalization, optedIn: granted)], completion)
+        }
+
+        /// Rıza kayıtları (`ads_personalization` …). Abonelik yoksa `HSError.noSubscription`.
+        public static func getConsents() async throws -> [HSUserConsent] {
+            try await getPreferences().consents
         }
 
         public enum pushSubscription {
@@ -1299,6 +1340,8 @@ final class HSNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     func handleWillPresent(_ notification: UNNotification, completion: @escaping (UNNotificationPresentationOptions) -> Void) -> Bool {
         guard let n = HSNotification(userInfo: notification.request.content.userInfo) else { return false }
         if let id = n.deliveryId { Pushizo.reportReceived(id) }
+        // Canlı sohbet bildirimi (`pushizo_chat`): okunmamış sayısı yenilenir.
+        Pushizo.Chat.onPushReceived(notification.request.content.userInfo)
         let event = HSForegroundEvent(notification: n) { show in
             completion(show ? [.banner, .sound, .badge, .list] : [])
         }
@@ -1322,6 +1365,10 @@ final class HSNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
             Pushizo.reportOpened(n, actionId: nil)
         default:
             Pushizo.reportOpened(n, actionId: response.actionIdentifier)
+        }
+        // Sohbet bildirimi: uygulamanın sohbet ekranını açabilmesi için açma dinleyicilerine iletilir.
+        if response.actionIdentifier != UNNotificationDismissActionIdentifier {
+            Pushizo.Chat.onNotificationOpened(response.notification.request.content.userInfo)
         }
         completion()
         return true

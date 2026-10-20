@@ -55,11 +55,35 @@ public final class HSApi {
 
     @discardableResult
     public func request(_ method: String, _ path: String, body: [String: Any]? = nil, attempt: Int = 0) async throws -> [String: Any] {
-        try await send(method, path, body: body, attempt: attempt, rerouted: false)
+        let payload = try body.map { (contentType: "application/json; charset=utf-8", data: try JSONSerialization.data(withJSONObject: $0)) }
+        return try await send(method, path, payload: payload, attempt: attempt, rerouted: false)
+    }
+
+    /// Ham gövdeli istek (ör. `multipart/form-data` sohbet eki); yeniden deneme JSON istekleriyle aynıdır.
+    @discardableResult
+    public func requestRaw(_ method: String, _ path: String, contentType: String, data: Data) async throws -> [String: Any] {
+        try await send(method, path, payload: (contentType: contentType, data: data), attempt: 0, rerouted: false)
+    }
+
+    /**
+     Server-Sent Events isteği (sohbet akışı; ADR-0040 §3): `Accept: text/event-stream`, isteğe bağlı `Last-Event-ID`.
+     Zaman aşımı kalp atışından (15 sn) uzundur; yeniden bağlanmayı çağıran yönetir.
+     */
+    public func streamRequest(_ path: String, lastEventId: Int?) -> URLRequest? {
+        guard let url = URL(string: base + path) else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 45
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("pushizo-ios/\(sdkVersion)", forHTTPHeaderField: "User-Agent")
+        if let lastEventId { request.setValue(String(lastEventId), forHTTPHeaderField: "Last-Event-ID") }
+        return request
     }
 
     /// `rerouted`: istek başına en fazla bir hücre yönlendirmesi izlenir (iki hücre birbirini gösterse de döngü yok).
-    private func send(_ method: String, _ path: String, body: [String: Any]?, attempt: Int, rerouted: Bool) async throws -> [String: Any] {
+    private func send(_ method: String, _ path: String, payload: (contentType: String, data: Data)?, attempt: Int, rerouted: Bool) async throws -> [String: Any] {
         let current = apiUrl
         guard let url = URL(string: base(for: current) + path) else { throw HSApiError(status: 0, code: "BAD_URL", message: path) }
         var request = URLRequest(url: url)
@@ -70,9 +94,9 @@ public final class HSApi {
         if let jwt = identityToken?(), !jwt.isEmpty {
             request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
         }
-        if let body {
-            request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        if let payload {
+            request.setValue(payload.contentType, forHTTPHeaderField: "Content-Type")
+            request.httpBody = payload.data
         }
         do {
             let (data, response) = try await session.data(for: request)
@@ -85,20 +109,20 @@ public final class HSApi {
             if !rerouted, let target = HSCellRouting.wrongCellTarget(status: status, envelope: json, current: current) {
                 updateApiUrl(target)
                 onApiUrlChange?(target)
-                return try await send(method, path, body: body, attempt: attempt, rerouted: true)
+                return try await send(method, path, payload: payload, attempt: attempt, rerouted: true)
             }
             let envelope = (json as? [String: Any])?["error"] as? [String: Any]
             let error = HSApiError(status: status, code: envelope?["code"] as? String ?? "HTTP_\(status)", message: envelope?["message"] as? String ?? "HTTP \(status)")
             guard error.isRetryable, attempt < backoff.count else { throw error }
             let retryAfter = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After").flatMap(UInt64.init)
             try await Task.sleep(nanoseconds: ((retryAfter ?? 0) > 0 ? retryAfter! * 1_000 : backoff[min(attempt, backoff.count - 1)]) * 1_000_000)
-            return try await send(method, path, body: body, attempt: attempt + 1, rerouted: rerouted)
+            return try await send(method, path, payload: payload, attempt: attempt + 1, rerouted: rerouted)
         } catch let error as HSApiError {
             throw error
         } catch {
             guard attempt < backoff.count else { throw HSApiError(status: 0, code: "NETWORK", message: error.localizedDescription) }
             try await Task.sleep(nanoseconds: backoff[min(attempt, backoff.count - 1)] * 1_000_000)
-            return try await send(method, path, body: body, attempt: attempt + 1, rerouted: rerouted)
+            return try await send(method, path, payload: payload, attempt: attempt + 1, rerouted: rerouted)
         }
     }
 }

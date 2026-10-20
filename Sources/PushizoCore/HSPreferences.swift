@@ -29,10 +29,11 @@ public struct HSMessageCategory: Equatable {
     }
 }
 
-/// `GET/PUT /preferences` sonucu: kullanıcının tercihleri ve app'in kategorileri.
+/// `GET/PUT /preferences` sonucu: kullanıcının tercihleri, app'in kategorileri ve rıza kayıtları (ADR-0037).
 public struct HSPreferencesResult: Equatable {
     public let preferences: [HSPreference]
     public let categories: [HSMessageCategory]
+    public let consents: [HSUserConsent]
 }
 
 /// `User.setPreferences` girdisi; `channel` nil ise tüm kanallar.
@@ -60,7 +61,19 @@ public enum HSPreferencesParser {
     public static func parseResult(_ json: [String: Any]) -> HSPreferencesResult {
         HSPreferencesResult(
             preferences: (json["data"] as? [[String: Any]] ?? []).compactMap(parsePreference),
-            categories: (json["categories"] as? [[String: Any]] ?? []).compactMap(parseCategory)
+            categories: (json["categories"] as? [[String: Any]] ?? []).compactMap(parseCategory),
+            consents: (json["consents"] as? [[String: Any]] ?? []).compactMap(parseConsent)
+        )
+    }
+
+    /// Rıza kaydı; amaçsız kayıt atlanır (eski API sürümlerinde `consents` yoktur).
+    public static func parseConsent(_ json: [String: Any]) -> HSUserConsent? {
+        guard let purpose = HSInAppParser.nonEmpty(json["purpose"]) else { return nil }
+        return HSUserConsent(
+            purpose: purpose,
+            granted: json["granted"] as? Bool ?? false,
+            source: HSInAppParser.nonEmpty(json["source"]),
+            updatedAt: HSInAppParser.nonEmpty(json["updated_at"]).flatMap(HSIsoTime.parse)
         )
     }
 

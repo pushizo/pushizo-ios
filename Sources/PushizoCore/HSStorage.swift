@@ -113,6 +113,43 @@ public final class HSStorage {
         defaults.set(map, forKey: key("contacts_\(channel)"))
     }
 
+    // MARK: - Canlı sohbet (ADR-0040 §2)
+
+    /// Sohbet ziyaretçi kimliği (gizli değil; UserDefaults).
+    public var chatVisitorId: String? { get { defaults.string(forKey: key("chat_visitor_id")) } set { defaults.set(newValue, forKey: key("chat_visitor_id")) } }
+    /**
+     Sohbet ziyaretçi belirteci (gizli): Keychain'de (`AfterFirstUnlockThisDeviceOnly`) saklanır; Keychain kullanılamazsa
+     (ör. imzasız test ortamı) uygulamanın UserDefaults'una düşülür. Loglanmaz; sunucu yalnızca SHA-256 özetini tutar.
+     */
+    public var chatVisitorToken: String? {
+        get { HSKeychain.read(account: key("chat_visitor_token")) ?? defaults.string(forKey: key("chat_visitor_token")) }
+        set {
+            if HSKeychain.write(newValue, account: key("chat_visitor_token")) {
+                defaults.removeObject(forKey: key("chat_visitor_token"))
+            } else {
+                defaults.set(newValue, forKey: key("chat_visitor_token"))
+            }
+        }
+    }
+    /// Uygulama sohbeti başlattı mı; kapalıyken login/abonelik değişiminde sohbet uçları çağrılmaz.
+    public var chatEnabled: Bool { get { defaults.bool(forKey: key("chat_enabled")) } set { defaults.set(newValue, forKey: key("chat_enabled")) } }
+    /// Son başarılı `chat/identify` girdisinin özeti (değişmediyse istek tekrarlanmaz).
+    public var chatIdentifyKey: String? { get { defaults.string(forKey: key("chat_identify_key")) } set { defaults.set(newValue, forKey: key("chat_identify_key")) } }
+    /// Görülen en büyük mesaj sıra numarası (akış yeniden kurulunca `Last-Event-ID`).
+    public var chatLastSeq: Int { get { defaults.integer(forKey: key("chat_last_seq")) } set { defaults.set(newValue, forKey: key("chat_last_seq")) } }
+    /// Sunucuya bildirilen son teslim işaretçisi.
+    public var chatDeliveredSeq: Int { get { defaults.integer(forKey: key("chat_delivered_seq")) } set { defaults.set(newValue, forKey: key("chat_delivered_seq")) } }
+    /// Son bilinen okunmamış mesaj sayısı.
+    public var chatUnreadCount: Int { get { defaults.integer(forKey: key("chat_unread_count")) } set { defaults.set(newValue, forKey: key("chat_unread_count")) } }
+
+    /// Ziyaretçiyi sıfırlar (logout / gizlilik onayının geri alınması); sonraki sohbet yeni kimlikle başlar.
+    public func clearChatVisitor() {
+        _ = HSKeychain.write(nil, account: key("chat_visitor_token"))
+        for name in ["chat_visitor_id", "chat_visitor_token", "chat_identify_key", "chat_last_seq", "chat_delivered_seq", "chat_unread_count"] {
+            defaults.removeObject(forKey: key(name))
+        }
+    }
+
     /// Kimlik temizliği; e-posta/SMS abonelikleri önceki kullanıcıda kalır, cihazdaki eşlemeleri silinir.
     public func clearIdentity() {
         for name in ["user_id", "external_id", "identity_hash", "user_identity_hash", "identity_jwt", "tags", "contacts_email", "contacts_sms", "pending_identity_op"] { defaults.removeObject(forKey: key(name)) }

@@ -1,0 +1,38 @@
+# CocoaPods trunk yayını (macOS)
+#
+# Trusted publishing (OIDC): uzun ömürlü belirteç saklanmaz. Ana depodaki yayın betiği paketi test edip derler, bu
+# deponun GitHub Release'ine ekler ve bu iş akışını sürüm etiketiyle çalıştırır:
+#   npm run sdk:publish -- <hedef> --yalnizca-github --tetikle --yayinla
+# Elle: Actions → Release → Run workflow → tag.
+# Kurulum (bir kez): pod trunk register ile oturum açın; ~/.netrc içindeki belirteci depo sırrı COCOAPODS_TRUNK_TOKEN olarak ekleyin (trunk OIDC desteklemez).
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Sürüm etiketi (ör. v0.1.0)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  trunk:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Swift testleri
+        run: swift test
+      - name: Pod doğrulaması
+        run: pod lib lint Pushizo.podspec --allow-warnings
+      - name: Trunk'a gönder
+        env:
+          COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
+        run: |
+          version=$(ruby -e "puts File.read('Pushizo.podspec')[/s\.version\s*=\s*'([^']+)'/, 1]")
+          if pod trunk info Pushizo 2>/dev/null | grep -q " - $version "; then echo "Pushizo $version zaten trunk'ta"; exit 0; fi
+          pod trunk push Pushizo.podspec --allow-warnings

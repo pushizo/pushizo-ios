@@ -16,6 +16,15 @@
 > **Status:** Swift Package Manager works from this repository today; the CocoaPods pod is being published.<br>
 > **Durum:** Swift Package Manager bugün bu depodan çalışır; CocoaPods pod'unun yayını hazırlanıyor.
 
+**Install from GitHub until then · O zamana kadar GitHub'dan kurulum:**
+
+```ruby
+pod 'Pushizo', :git => 'https://github.com/pushizo/pushizo-ios.git', :tag => '0.1.0'
+pod 'Pushizo/Extension', :git => 'https://github.com/pushizo/pushizo-ios.git', :tag => '0.1.0'
+```
+
+**After publication · Yayından sonra:**
+
 ```swift
 .package(url: "https://github.com/pushizo/pushizo-ios", from: "0.1.0")
 ```

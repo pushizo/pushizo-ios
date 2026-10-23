@@ -19,7 +19,7 @@ final class HSQueueTests: XCTestCase {
     func testDeferredOperationStaysQueuedWithoutBlockingOthers() async {
         let queue = HSQueue(defaults: defaults, appId: "app_1")
         queue.enqueue(["type": "event", "name": "a", "at": 1])
-        queue.enqueue(["type": "contact_add", "address": "ali@example.com", "at": 2])
+        queue.enqueue(["type": "contact_add", "address": "ali@pushizo.com", "at": 2])
         queue.enqueue(["type": "session_start", "at": 3])
         var handled: [String] = []
         let complete = await queue.flush { op in

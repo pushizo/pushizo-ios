@@ -13,7 +13,7 @@ import UserNotifications
 
  ```swift
  class NotificationService: UNNotificationServiceExtension {
-   let hs = PushizoNotificationServiceExtension(appId: "app_…", apiUrl: "https://api.example.com", appGroup: "group.com.example.app")
+   let hs = PushizoNotificationServiceExtension(appId: "app_…", apiUrl: "https://api.pushizo.com", appGroup: "group.com.pushizo.app")
    override func didReceive(_ request: UNNotificationRequest, withContentHandler handler: @escaping (UNNotificationContent) -> Void) {
      hs.didReceive(request, withContentHandler: handler)
    }

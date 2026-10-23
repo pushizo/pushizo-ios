@@ -13,8 +13,8 @@
 
 **Pushizo iOS SDK** — Swift package for APNs registration, users, tags and aliases, events, in-app messages, Live Activities and delivery receipts. Swift 5.9, iOS 15+ and Mac Catalyst 15+. Add `Pushizo` to the app target and `PushizoExtension` to the Notification Service Extension.
 
-> **Status:** Swift Package Manager works from this repository today; the CocoaPods pod is being published.<br>
-> **Durum:** Swift Package Manager bugün bu depodan çalışır; CocoaPods pod'unun yayını hazırlanıyor.
+> **Status:** Swift Package Manager and the Swift Package Index list this package today; the CocoaPods pod is being published.<br>
+> **Durum:** Swift Package Manager ve Swift Package Index bugün bu paketi listeler; CocoaPods pod'unun yayını hazırlanıyor.
 
 **Install from GitHub until then · O zamana kadar GitHub'dan kurulum:**
 

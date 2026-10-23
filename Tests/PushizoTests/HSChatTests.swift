@@ -94,12 +94,12 @@ final class HSChatTests: XCTestCase {
 
     func testSendOfflineTypingAndAckBodies() throws {
         let send = HSChatRequests.sendBody(visitor: visitor, clientMessageId: "m_abcdefgh", text: "Merhaba", optionId: "opt_1",
-                                           name: nil, email: "ali@example.com", language: nil)
+                                           name: nil, email: "ali@pushizo.com", language: nil)
         XCTAssertEqual(send["client_message_id"] as? String, "m_abcdefgh")
         XCTAssertEqual(send["option_id"] as? String, "opt_1")
         XCTAssertNil(send["name"])
-        let offline = HSChatRequests.offlineBody(visitor: visitor, clientMessageId: "m_12345678", email: "ali@example.com", text: "Arayın", name: "Ali", language: nil)
-        XCTAssertEqual(offline["email"] as? String, "ali@example.com")
+        let offline = HSChatRequests.offlineBody(visitor: visitor, clientMessageId: "m_12345678", email: "ali@pushizo.com", text: "Arayın", name: "Ali", language: nil)
+        XCTAssertEqual(offline["email"] as? String, "ali@pushizo.com")
         XCTAssertEqual(HSChatRequests.typingBody(visitor: visitor, typing: true)["typing"] as? Bool, true)
         XCTAssertEqual(try HSChatRequests.ackBody(visitor: visitor, readSeq: 7, deliveredSeq: nil)["read_seq"] as? Int, 7)
         XCTAssertThrowsError(try HSChatRequests.ackBody(visitor: visitor, readSeq: nil, deliveredSeq: nil))

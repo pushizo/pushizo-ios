@@ -142,6 +142,6 @@ final class HSCellRoutingTests: XCTestCase {
         XCTAssertEqual(storage.resolvedApiUrl(seed: "https://api.pushizo.com"), "https://api.pushizo.com")
         storage.saveRegionalApi(seed: "https://api.pushizo.com/", url: "https://api.eu.test")
         XCTAssertEqual(storage.resolvedApiUrl(seed: "https://api.pushizo.com"), "https://api.eu.test")
-        XCTAssertEqual(storage.resolvedApiUrl(seed: "https://proxy.example.com"), "https://proxy.example.com")
+        XCTAssertEqual(storage.resolvedApiUrl(seed: "https://proxy.pushizo.com"), "https://proxy.pushizo.com")
     }
 }

@@ -105,13 +105,13 @@ final class HSInAppParserTests: XCTestCase {
            "triggers":[{"kind":"event","name":"cart_viewed"},{"kind":"trigger","key":"cart_total","op":"gt","value":100}],
            "display":{"layout":"banner_bottom","background_color":"#ffffff","text_color":null,"dismissible":false,"auto_dismiss_seconds":8,
              "blocks":[
-               {"type":"image","url":"https://cdn.example.com/sale.png","alt":"İndirim"},
+               {"type":"image","url":"https://cdn.pushizo.com/sale.png","alt":"İndirim"},
                {"type":"title","text":"Merhaba Ayşe"},
                {"type":"body","text":"Sepetin seni bekliyor"},
                {"type":"button","id":"go","text":"Sepete git","action":{"type":"deeplink","url":"myapp://cart"},"background_color":"#18181b","text_color":null},
                {"type":"button","id":"vip","text":"VIP","action":{"type":"tags","tags":{"segment":"vip"}},"background_color":null,"text_color":null},
                {"type":"button","id":"bad","text":"Kötü","action":{"type":"url","url":"javascript:alert(1)"},"background_color":null,"text_color":null},
-               {"type":"video","url":"https://cdn.example.com/x.mp4"}]},
+               {"type":"video","url":"https://cdn.pushizo.com/x.mp4"}]},
            "remaining_impressions":2,"min_interval_seconds":86400,"stop_after_interaction":true,"last_impression_at":"2026-10-06T12:00:00.000Z","end_at":null},
           {"id":"iam_broken","priority":1},
           {"id":"iam_2","priority":0,"triggers":[{"kind":"session_start"}],
@@ -129,7 +129,7 @@ final class HSInAppParserTests: XCTestCase {
         XCTAssertEqual(m.display.autoDismissSeconds, 8)
         XCTAssertNil(m.display.textColor)
         XCTAssertEqual(m.display.blocks.count, 5)
-        XCTAssertEqual(m.display.blocks[0], .image(url: "https://cdn.example.com/sale.png", alt: "İndirim"))
+        XCTAssertEqual(m.display.blocks[0], .image(url: "https://cdn.pushizo.com/sale.png", alt: "İndirim"))
         XCTAssertEqual(m.display.buttons.map(\.id), ["go", "vip"])
         XCTAssertEqual(m.display.buttons[0].action, .deeplink("myapp://cart"))
         XCTAssertEqual(m.display.buttons[1].action, .tags(["segment": "vip"]))
@@ -241,7 +241,7 @@ final class HSInAppParserTests: XCTestCase {
         {"data":[
           {"id":"ibx_2","message_id":"msg_2","title":"Kargo","body":"Siparişin yolda","url":"myapp://orders/2","image_url":null,
            "data":{"order":"2"},"read":false,"read_at":null,"archived_at":null,"expires_at":"2026-11-01T00:00:00Z","created_at":"2026-10-07T10:00:00Z"},
-          {"id":"ibx_1","message_id":null,"title":null,"body":"Hoş geldin","url":null,"image_url":"https://cdn.example.com/a.png",
+          {"id":"ibx_1","message_id":null,"title":null,"body":"Hoş geldin","url":null,"image_url":"https://cdn.pushizo.com/a.png",
            "data":{},"read":true,"read_at":"2026-10-06T09:00:00Z","archived_at":null,"expires_at":null,"created_at":"2026-10-06T08:00:00Z"}],
          "unread_count":1,"next_cursor":"c2","has_more":true}
         """

@@ -25,16 +25,23 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag }}
-      - name: Swift testleri
+      - name: Swift derlemesi
         run: |
           set -euo pipefail
-          # Paket iOS/Mac Catalyst. Ana makine macOS SDK'sı UserNotifications hatası verir.
-          sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-          ver="$(xcrun --sdk iphonesimulator --show-sdk-version)"
-          echo "iphonesimulator=$ver"
-          swift test -Xswiftc -sdk -Xswiftc "$sdk" -Xswiftc -target -Xswiftc "arm64-apple-ios${ver}-simulator"
+          # Paket yalnızca iOS ve Mac Catalyst. `swift test` ana makine SDK'sını karıştırır;
+          # otomatik şemada test eylemi yok. Kütüphane iOS simülatöründe derlenir, pod lint kapıdır.
+          xcodebuild -list
+          dest="$(xcrun simctl list devices available | sed -n 's/^[[:space:]]*\(iPhone[^()]*\) (.*/\1/p' | head -n 1 | sed 's/[[:space:]]*$//')"
+          echo "simulator=$dest"
+          xcodebuild -scheme Pushizo -destination "platform=iOS Simulator,name=${dest}" build CODE_SIGNING_ALLOWED=NO
       - name: Pod doğrulaması
-        run: pod lib lint Pushizo.podspec --allow-warnings
+        run: |
+          set -euo pipefail
+          if ! command -v pod >/dev/null 2>&1; then
+            sudo gem install cocoapods -N
+          fi
+          pod --version
+          pod lib lint Pushizo.podspec --allow-warnings
       - name: Trunk'a gönder
         env:
           COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}

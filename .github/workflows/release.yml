@@ -28,13 +28,11 @@ jobs:
       - name: Swift testleri
         run: |
           set -euo pipefail
-          # Paket yalnızca iOS ve Mac Catalyst hedefler. `swift test` ana makinede macOS
-          # SDK'sıyla derlendiği için UserNotifications kullanılabilirlik hatası verir.
-          dest="$(xcrun simctl list devices available | sed -n 's/^[[:space:]]*\(iPhone[^()]*\) (.*/\1/p' | head -n 1 | sed 's/[[:space:]]*$//')"
-          echo "simulator=$dest"
-          scheme="$(xcodebuild -list -json | python3 -c 'import json,sys; d=json.load(sys.stdin); names=(d.get("workspace") or d.get("project") or {}).get("schemes") or []; tests=[n for n in names if n.endswith("Tests")]; print(tests[0] if tests else names[0])')"
-          echo "scheme=$scheme"
-          xcodebuild -scheme "$scheme" -destination "platform=iOS Simulator,name=${dest}" test CODE_SIGNING_ALLOWED=NO
+          # Paket iOS/Mac Catalyst. Ana makine macOS SDK'sı UserNotifications hatası verir.
+          sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+          ver="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          echo "iphonesimulator=$ver"
+          swift test -Xswiftc -sdk -Xswiftc "$sdk" -Xswiftc -target -Xswiftc "arm64-apple-ios${ver}-simulator"
       - name: Pod doğrulaması
         run: pod lib lint Pushizo.podspec --allow-warnings
       - name: Trunk'a gönder

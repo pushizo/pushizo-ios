@@ -75,7 +75,7 @@ public struct HSOptions {
     /// APNs ortamı ("sandbox"/"development" veya "production"); nil ise DEBUG derlemesi ya da gömülü
     /// provisioning profilindeki `aps-environment` ile tespit edilir (`device.push_environment`).
     public var apnsEnvironment: String?
-    /// NSE ile durum paylaşımı için App Group (ör. "group.com.example.app"). Rozet sayacı için verilmezse
+    /// NSE ile durum paylaşımı için App Group (ör. "group.com.pushizo.app"). Rozet sayacı için verilmezse
     /// Info.plist `PushizoAppGroup`, o da yoksa `group.<bundle id>.pushizo` kullanılır.
     public var appGroup: String?
     /// Provisional (sessiz) izin ile başla.
@@ -103,18 +103,18 @@ public enum HSLog {
  Pushizo iOS SDK (eski sağlayıcı v5 yüzeyiyle uyumlu).
 
  ```swift
- Pushizo.initialize("app_…", launchOptions: launchOptions) { $0.apiUrl = "https://api.example.com" }
+ Pushizo.initialize("app_…", launchOptions: launchOptions) { $0.apiUrl = "https://api.pushizo.com" }
  Pushizo.Notifications.requestPermission { accepted in }
  let token = Pushizo.Notifications.addPermissionObserver { granted in }
  Pushizo.login("user_42")
  Pushizo.User.addTag("plan", "pro")
- Pushizo.User.addEmail("ali@example.com")
+ Pushizo.User.addEmail("ali@pushizo.com")
  Pushizo.InAppMessages.addTrigger("level", "gold")
  let page = try await Pushizo.Inbox.list(limit: 20)
  ```
  */
 public enum Pushizo {
-    public static let sdkVersion = "0.1.0"
+    public static let sdkVersion = "0.1.1"
     static var appId = ""
     static var options = HSOptions()
     static var storage: HSStorage?

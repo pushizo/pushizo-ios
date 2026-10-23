@@ -138,6 +138,13 @@ public struct HSInAppClickEvent: Equatable {
     public let messageId: String
     public let actionId: String
     public let url: String?
+
+    /// Üye başlatıcı modül dışına kapalıdır; `Pushizo` hedefi bu olayı kendisi kurar.
+    public init(messageId: String, actionId: String, url: String?) {
+        self.messageId = messageId
+        self.actionId = actionId
+        self.url = url
+    }
 }
 
 /// `GET /in-app` yanıt ayrıştırıcı; bozuk mesaj atlanır, diğerleri kullanılır.

@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'Pushizo'
-  s.version          = '0.1.0'
+  s.version          = '0.1.1'
   s.summary          = 'Pushizo iOS SDK: APNs kaydı, kullanıcı/tag yönetimi, olaylar, teslimat geri bildirimi'
   s.homepage         = 'https://github.com/pushizo/pushizo-ios'
   s.license          = { :type => 'MIT', :file => 'LICENSE' }

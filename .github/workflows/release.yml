@@ -26,7 +26,13 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
       - name: Swift testleri
-        run: swift test
+        run: |
+          set -euo pipefail
+          # Paket yalnızca iOS ve Mac Catalyst hedefler. `swift test` ana makinede macOS
+          # SDK'sıyla derlendiği için UserNotifications kullanılabilirlik hatası verir.
+          dest="$(xcrun simctl list devices available | sed -n 's/^[[:space:]]*\(iPhone[^()]*\) (.*/\1/p' | head -n 1 | sed 's/[[:space:]]*$//')"
+          echo "simulator=$dest"
+          xcodebuild -scheme PushizoFramework -destination "platform=iOS Simulator,name=${dest}" test CODE_SIGNING_ALLOWED=NO
       - name: Pod doğrulaması
         run: pod lib lint Pushizo.podspec --allow-warnings
       - name: Trunk'a gönder

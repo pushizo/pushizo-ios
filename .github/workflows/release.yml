@@ -48,4 +48,11 @@ jobs:
         run: |
           version=$(ruby -e "puts File.read('Pushizo.podspec')[/s\.version\s*=\s*'([^']+)'/, 1]")
           if pod trunk info Pushizo 2>/dev/null | grep -q " - $version "; then echo "Pushizo $version zaten trunk'ta"; exit 0; fi
-          pod trunk push Pushizo.podspec --allow-warnings
+          # Trunk, etiketi GitHub commit API ile doğrular; zaman aşımı geçicidir.
+          ok=0
+          for attempt in 1 2 3; do
+            if pod trunk push Pushizo.podspec --allow-warnings; then ok=1; break; fi
+            echo "trunk denemesi $attempt başarısız"
+            sleep 25
+          done
+          test "$ok" = 1

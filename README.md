@@ -43,11 +43,11 @@ Swift paketi. Swift 5.9, iOS 15+ ve Mac Catalyst 15+.
 ## Kurulum
 
 **Swift Package Manager:** Xcode → File → Add Package Dependencies →
-`https://github.com/pushizo/pushizo-ios` (Up to Next Major, `0.1.1`). Uygulama hedefine `Pushizo`, NSE hedefine
+`https://github.com/pushizo/pushizo-ios` (Up to Next Major, `0.1.2`). Uygulama hedefine `Pushizo`, NSE hedefine
 `PushizoExtension` ekleyin. `Package.swift` ile:
 
 ```swift
-.package(url: "https://github.com/pushizo/pushizo-ios", from: "0.1.1")
+.package(url: "https://github.com/pushizo/pushizo-ios", from: "0.1.2")
 ```
 
 **CocoaPods:**

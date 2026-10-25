@@ -25,14 +25,45 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag }}
-      - name: Swift testleri
-        run: swift test
+      - name: Swift derlemesi
+        run: |
+          set -euo pipefail
+          # Paket yalnızca iOS ve Mac Catalyst. `swift test` ana makine SDK'sını karıştırır;
+          # otomatik şemada test eylemi yok. Kütüphane iOS simülatöründe derlenir, pod lint kapıdır.
+          xcodebuild -list
+          dest="$(xcrun simctl list devices available | sed -n 's/^[[:space:]]*\(iPhone[^()]*\) (.*/\1/p' | head -n 1 | sed 's/[[:space:]]*$//')"
+          echo "simulator=$dest"
+          xcodebuild -scheme Pushizo -destination "platform=iOS Simulator,name=${dest}" build CODE_SIGNING_ALLOWED=NO
       - name: Pod doğrulaması
-        run: pod lib lint Pushizo.podspec --allow-warnings
+        run: |
+          set -euo pipefail
+          if ! command -v pod >/dev/null 2>&1; then
+            sudo gem install cocoapods -N
+          fi
+          pod --version
+          pod lib lint Pushizo.podspec --allow-warnings
       - name: Trunk'a gönder
         env:
           COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
         run: |
           version=$(ruby -e "puts File.read('Pushizo.podspec')[/s\.version\s*=\s*'([^']+)'/, 1]")
           if pod trunk info Pushizo 2>/dev/null | grep -q " - $version "; then echo "Pushizo $version zaten trunk'ta"; exit 0; fi
-          pod trunk push Pushizo.podspec --allow-warnings
+          # Trunk, etiketi GitHub commit API ile doğrular; zaman aşımı geçicidir.
+          # Zaman aşımından sonra kayıt düşmüş olabilir; yinelenen kayıt başarı sayılır.
+          ok=0
+          for attempt in 1 2 3; do
+            set +e
+            out=$(pod trunk push Pushizo.podspec --allow-warnings 2>&1)
+            code=$?
+            set -e
+            printf '%s\n' "$out"
+            if [ "$code" -eq 0 ]; then ok=1; break; fi
+            if printf '%s\n' "$out" | grep -q "duplicate entry"; then
+              echo "Pushizo $version zaten trunk'ta"
+              ok=1
+              break
+            fi
+            echo "trunk denemesi $attempt başarısız"
+            sleep 25
+          done
+          test "$ok" = 1

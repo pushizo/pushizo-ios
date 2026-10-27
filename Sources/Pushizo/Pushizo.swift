@@ -374,6 +374,7 @@ public enum Pushizo {
         let osName = "iOS"
         #endif
         // `push_capable` bildirim iznini yansıtır; false ise sunucu push aboneliğini `pending` tutar.
+        let bundle = Bundle.main.bundleIdentifier?.lowercased() ?? ""
         return HSDeviceInfo.make(
             model: model,
             os: osName,
@@ -383,7 +384,9 @@ public enum Pushizo {
             locale: Locale.current.identifier.replacingOccurrences(of: "_", with: "-"),
             timezone: TimeZone.current.identifier,
             pushCapable: HSPermissionTracker.isGranted(settings.authorizationStatus),
-            pushEnvironment: pushEnvironment()
+            pushEnvironment: pushEnvironment(),
+            formFactor: model.lowercased().contains("watch") ? "watch" : "phone",
+            pushKind: bundle.contains("clip") ? "app_clip" : "alert"
         )
     }
 

@@ -29,6 +29,8 @@ public struct HSNotification: Equatable {
     public let badgeIncrement: Int?
     /// `aps.badge`: rozetin ayarlanacağı değer (SetTo).
     public let badgeSet: Int?
+    /// `hs.carousel` görsel adresleri.
+    public let carousel: [String]
 
     /// `userInfo` sözlüğünden ayrıştırır; Pushizo dışı payload'larda nil döner.
     /// Yeni biçim `hs.dlv`/`hs.msg`/`hs.buttons`; eski `delivery_id`/`message_id`/`actions` alanlarına geri düşer.
@@ -57,6 +59,7 @@ public struct HSNotification: Equatable {
         }
         self.badgeIncrement = (hs?["badge_inc"] as? NSNumber)?.intValue
         self.badgeSet = (aps["badge"] as? NSNumber)?.intValue
+        self.carousel = ((hs?["carousel"] as? [[String: Any]]) ?? []).compactMap { HSNotification.string($0["url"]) }
         var custom: [String: String] = [:]
         for (key, value) in userInfo {
             guard let k = key as? String, k != "aps", k != "hs", !k.hasPrefix("hs_"), let v = value as? String else { continue }

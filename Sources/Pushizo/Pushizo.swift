@@ -1252,6 +1252,29 @@ public enum Pushizo {
     }
 
     /// Bildirim kutusu (`add_to_inbox` mesajları). Login'de `identityHash` verildiyse isteklere eklenir.
+    /// Gömülü yerleşimler (ADR-0068): model döner, çizim uygulamanındır; içerik ekrana gelince `reportImpression` çağrılır.
+    public enum Placements {
+        /// Alanın içeriği. Abonelik yoksa veya onay bekleniyorsa boş döner; `limit` 1-10.
+        public static func list(_ key: String, limit: Int = 1) async throws -> [HSInAppMessage] {
+            guard key.range(of: "^[a-z][a-z0-9_.-]{0,63}$", options: .regularExpression) != nil else { throw HSError.invalidArgument("Geçersiz yerleşim anahtarı") }
+            guard (1...10).contains(limit) else { throw HSError.invalidArgument("limit 1-10 olmalı") }
+            guard let store = storage, let api, networkAllowed, let subId = engagementSubscriptionId() else { return [] }
+            let query = HSOwnership.subscriptionQuery(subscriptionId: subId, registeredToken: ownershipToken(store, subscriptionId: subId), identityHash: nil)
+            return HSInAppParser.parseList(try await api.request("GET", "/placements/\(key)?\(query)&supports=&limit=\(limit)"))
+        }
+
+        public static func reportImpression(_ message: HSInAppMessage) { record(message, "impression", nil) }
+        public static func reportClick(_ message: HSInAppMessage, buttonId: String) { record(message, "click", buttonId) }
+        public static func reportDismiss(_ message: HSInAppMessage) { record(message, "dismiss", nil) }
+
+        private static func record(_ message: HSInAppMessage, _ type: String, _ buttonId: String?) {
+            var op: [String: Any] = ["type": "in_app_event", "message_id": message.id, "event": type, "at": Date().timeIntervalSince1970]
+            if let buttonId { op["button_id"] = buttonId }
+            if let variantId = message.variantId { op["variant_id"] = variantId }
+            enqueue(op)
+        }
+    }
+
     /// Özellik bayrakları: değerler oturum başında yenilenir ve cihazda saklanır (ADR-0066).
     public enum FeatureFlags {
         /// Değerleri hemen yeniler. Hata son değerleri korur; gizlilik onayı beklenirken istek gönderilmez.

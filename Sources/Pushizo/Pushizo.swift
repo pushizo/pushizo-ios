@@ -242,6 +242,7 @@ public enum Pushizo {
             }
             await flushPendingReceived()
             await flushQueue()
+            await FeatureFlags.refresh()
             // Uygulama bölge olayıyla uyandıysa temsilci hazır olmalı (ADR-0065).
             HSLocationController.shared.prepareForGeofenceEvents()
             // Oturum başında konum (yalnızca paylaşım açık, izin verilmiş ve uygulama ön plandaysa).
@@ -1251,6 +1252,47 @@ public enum Pushizo {
     }
 
     /// Bildirim kutusu (`add_to_inbox` mesajları). Login'de `identityHash` verildiyse isteklere eklenir.
+    /// Özellik bayrakları: değerler oturum başında yenilenir ve cihazda saklanır (ADR-0066).
+    public enum FeatureFlags {
+        /// Değerleri hemen yeniler. Hata son değerleri korur; gizlilik onayı beklenirken istek gönderilmez.
+        @discardableResult
+        public static func refresh() async -> Bool {
+            guard let store = storage, let api, networkAllowed else { return false }
+            let subject: String
+            if let existing = store.featureFlagSubject {
+                subject = existing
+            } else {
+                subject = HSFeatureFlagRules.newSubject()
+                store.featureFlagSubject = subject
+            }
+            let subId = engagementSubscriptionId()
+            let body = HSFeatureFlagRules.body(
+                subscriptionId: subId,
+                subject: subject,
+                registeredToken: subId.flatMap { ownershipToken(store, subscriptionId: $0) },
+                identityHash: store.userIdentityHash
+            )
+            do {
+                guard let flags = HSFeatureFlagRules.parse(try await api.request("POST", "/feature-flags/evaluate", body: body)) else { return false }
+                store.featureFlags = flags
+                return true
+            } catch {
+                HSLog.log(.debug, "özellik bayrakları alınamadı: \(error.localizedDescription)")
+                return false
+            }
+        }
+
+        /// Bayrak bu kullanıcı için açık mı; değer henüz yoksa `default`.
+        public static func isEnabled(_ key: String, default fallback: Bool = false) -> Bool {
+            HSFeatureFlagRules.isEnabled(storage?.featureFlags, key: key, default: fallback)
+        }
+
+        /// Bayrağın değeri (metin, sayı, mantıksal, sözlük veya dizi); değer yoksa `default`.
+        public static func value(_ key: String, default fallback: Any? = nil) -> Any? {
+            HSFeatureFlagRules.value(storage?.featureFlags, key: key) ?? fallback
+        }
+    }
+
     public enum Inbox {
         /// `registeredToken`: aboneliğin sahiplik kanıtı kaynağı (push: kayıtlı token, e-posta/SMS: kanonik adres; ADR-0016).
         private struct Ctx { let userId: String; let subscriptionId: String; let registeredToken: String?; let identityHash: String? }

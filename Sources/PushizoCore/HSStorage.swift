@@ -35,6 +35,13 @@ public final class HSStorage {
     public var tags: [String: String] { get { defaults.dictionary(forKey: key("tags")) as? [String: String] ?? [:] } set { defaults.set(newValue, forKey: key("tags")) } }
     /// `Location.setShared`: konum paylaşımı açık mı (varsayılan kapalı; v2 Faz 17b).
     public var locationShared: Bool { get { defaults.bool(forKey: key("location_shared")) } set { defaults.set(newValue, forKey: key("location_shared")) } }
+    /// Son alınan özellik bayrakları (ADR-0066).
+    public var featureFlags: [String: [String: Any]]? {
+        get { defaults.dictionary(forKey: key("feature_flags")) as? [String: [String: Any]] }
+        set { defaults.set(newValue, forKey: key("feature_flags")) }
+    }
+    /// Abonelik yokken kovanın hesaplandığı kalıcı rastgele kimlik.
+    public var featureFlagSubject: String? { get { defaults.string(forKey: key("feature_flag_subject")) } set { defaults.set(newValue, forKey: key("feature_flag_subject")) } }
     /// Arka plan bölge izleme açık mı (ADR-0065; varsayılan kapalı).
     public var geofencingEnabled: Bool { get { defaults.bool(forKey: key("geofencing_enabled")) } set { defaults.set(newValue, forKey: key("geofencing_enabled")) } }
     /// Bölge listesinin son alındığı an ve konum.

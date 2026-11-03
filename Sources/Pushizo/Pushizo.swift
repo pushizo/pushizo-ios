@@ -242,6 +242,8 @@ public enum Pushizo {
             }
             await flushPendingReceived()
             await flushQueue()
+            // Uygulama bölge olayıyla uyandıysa temsilci hazır olmalı (ADR-0065).
+            HSLocationController.shared.prepareForGeofenceEvents()
             // Oturum başında konum (yalnızca paylaşım açık, izin verilmiş ve uygulama ön plandaysa).
             Location.refresh()
         }
@@ -573,6 +575,10 @@ public enum Pushizo {
                 throw HSQueueDeferred("push aboneliği yok")
             }
             try await api.request("PATCH", "/subscriptions/\(subId)", body: HSAdsRules.body(for: op, registeredToken: store.registeredToken))
+        case HSGeofenceRules.operationType:
+            guard let subId = store.subscriptionId else { throw HSQueueDeferred("push aboneliği yok") }
+            guard let body = HSGeofenceRules.body(for: op, registeredToken: store.registeredToken) else { return }
+            try await api.request("POST", "/subscriptions/\(subId)/geofence-events", body: body)
         case HSLocationRules.operationType:
             // Daha yeni bir konum işlemi kuyruktaysa bu atlanır (son durum kazanır).
             if HSLocationRules.isSuperseded(op, queue: queue?.items ?? []) { return }

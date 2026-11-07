@@ -3,7 +3,7 @@ import UserNotifications
 
 /// Uygulama ile Notification Service Extension arasında paylaşılan App Group çözümü.
 public enum HSAppGroup {
-    /// Info.plist anahtarı: uygulama ve NSE Info.plist'lerine aynı değer yazılır (ör. "group.com.example.app.pushizo").
+    /// Info.plist anahtarı: uygulama ve NSE Info.plist'lerine aynı değer yazılır (ör. "group.com.pushizo.app.pushizo").
     public static let infoPlistKey = "PushizoAppGroup"
 
     /**

@@ -49,7 +49,7 @@ final class HSTokenSyncTests: XCTestCase {
         // Bilinen vektör: SHA-256("abc").
         XCTAssertEqual(HSOwnership.tokenHash("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
         XCTAssertEqual(HSOwnership.query(registeredToken: nil), "")
-        XCTAssertEqual(HSOwnership.query(registeredToken: "ayse@example.com"), "?token_hash=\(HSOwnership.tokenHash("ayse@example.com"))")
+        XCTAssertEqual(HSOwnership.query(registeredToken: "ayse@pushizo.com"), "?token_hash=\(HSOwnership.tokenHash("ayse@pushizo.com"))")
         let identity = String(repeating: "a", count: 64)
         XCTAssertEqual(
             HSOwnership.query(registeredToken: "+905321234567", identityHash: identity),
@@ -81,17 +81,17 @@ final class HSTokenSyncTests: XCTestCase {
             "subscription_id=sub_push&token_hash=\(HSOwnership.tokenHash("apns_tok"))&identity_hash=\(identity)"
         )
         XCTAssertEqual(
-            HSOwnership.subscriptionQuery(subscriptionId: "sub_mail", registeredToken: "ayse@example.com"),
-            "subscription_id=sub_mail&token_hash=\(HSOwnership.tokenHash("ayse@example.com"))"
+            HSOwnership.subscriptionQuery(subscriptionId: "sub_mail", registeredToken: "ayse@pushizo.com"),
+            "subscription_id=sub_mail&token_hash=\(HSOwnership.tokenHash("ayse@pushizo.com"))"
         )
         // Kanıt yoksa yalnızca abonelik kimliği; sorgu değeri güvenli kodlanır.
         XCTAssertEqual(HSOwnership.subscriptionQuery(subscriptionId: "a&b", registeredToken: nil), "subscription_id=a%26b")
 
         // In-app olayı ve inbox read/read-all gövdesi.
-        let event = HSOwnership.subscriptionBody(["type": "impression"], subscriptionId: "sub_mail", registeredToken: "ayse@example.com")
+        let event = HSOwnership.subscriptionBody(["type": "impression"], subscriptionId: "sub_mail", registeredToken: "ayse@pushizo.com")
         XCTAssertEqual(event["subscription_id"] as? String, "sub_mail")
         XCTAssertEqual(event["type"] as? String, "impression")
-        XCTAssertEqual(event["token_hash"] as? String, HSOwnership.tokenHash("ayse@example.com"))
+        XCTAssertEqual(event["token_hash"] as? String, HSOwnership.tokenHash("ayse@pushizo.com"))
         XCTAssertNil(event["identity_hash"])
         let read = HSOwnership.subscriptionBody(subscriptionId: "sub_push", registeredToken: "apns_tok", identityHash: identity)
         XCTAssertEqual(Set(read.keys), ["subscription_id", "token_hash", "identity_hash"])

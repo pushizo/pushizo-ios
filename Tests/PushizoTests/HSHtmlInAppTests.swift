@@ -54,7 +54,7 @@ final class HSHtmlInAppTests: XCTestCase {
             XCTAssertEqual(HSHtmlBridge.safeUrl(c["value"]), c["expected"] as? String, c["value"] as! String)
         }
         XCTAssertNil(HSHtmlBridge.safeUrl(42))
-        XCTAssertTrue(HSHtmlBridge.isWebUrl("HTTPS://shop.example.com"))
+        XCTAssertTrue(HSHtmlBridge.isWebUrl("HTTPS://shop.pushizo.com"))
         XCTAssertFalse(HSHtmlBridge.isWebUrl("myapp://cart"))
     }
 
@@ -116,7 +116,7 @@ final class HSHtmlInAppTests: XCTestCase {
           "display": { "layout": "modal", "dismissible": true, "content_type": "blocks", "html": null, "html_height": null, "blocks": [
             { "type": "title", "text": "Yeni özellikler" },
             { "type": "carousel", "id": "steps", "cards": [
-              { "id": "c1", "title": "Adım 1", "body": "Profilini tamamla", "image_url": "https://cdn.example.com/1.png", "image_alt": "Profil",
+              { "id": "c1", "title": "Adım 1", "body": "Profilini tamamla", "image_url": "https://cdn.pushizo.com/1.png", "image_alt": "Profil",
                 "button": { "id": "b1", "text": "Başla", "action": { "type": "deeplink", "url": "myapp://profile" } } },
               { "id": "c2", "title": "Adım 2", "body": null, "image_url": null, "image_alt": null, "button": null },
               { "id": "c3", "title": "Adım 3", "button": { "id": "bad", "text": "Kötü", "action": { "type": "url", "url": "javascript:alert(1)" } } },
@@ -135,7 +135,7 @@ final class HSHtmlInAppTests: XCTestCase {
         XCTAssertEqual(carousel.id, "steps")
         XCTAssertEqual(carousel.cards.map(\.id), ["c1", "c2", "c3"])
         XCTAssertEqual(carousel.cards[0].body, "Profilini tamamla")
-        XCTAssertEqual(carousel.cards[0].imageUrl, "https://cdn.example.com/1.png")
+        XCTAssertEqual(carousel.cards[0].imageUrl, "https://cdn.pushizo.com/1.png")
         XCTAssertEqual(carousel.cards[0].imageAlt, "Profil")
         XCTAssertEqual(carousel.cards[0].button?.action, .deeplink("myapp://profile"))
         XCTAssertNil(carousel.cards[1].button)

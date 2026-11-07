@@ -223,7 +223,8 @@ public struct PushizoDefaultLiveActivityAttributes: PushizoLiveActivityAttribute
     }
 }
 
-#if canImport(ActivityKit) && os(iOS)
+// Yeni SDK'larda ActivityKit türleri Mac Catalyst'te kullanılamaz olarak işaretlidir; Catalyst'te etkinlik zaten gösterilmez.
+#if canImport(ActivityKit) && os(iOS) && !targetEnvironment(macCatalyst)
 @available(iOS 16.1, *)
 extension PushizoDefaultLiveActivityAttributes: ActivityAttributes {}
 #endif

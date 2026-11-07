@@ -114,7 +114,7 @@ public enum HSLog {
  ```
  */
 public enum Pushizo {
-    public static let sdkVersion = "0.1.2"
+    public static let sdkVersion = "0.2.0"
     static var appId = ""
     static var options = HSOptions()
     static var storage: HSStorage?
@@ -242,6 +242,9 @@ public enum Pushizo {
             }
             await flushPendingReceived()
             await flushQueue()
+            await FeatureFlags.refresh()
+            // Uygulama bölge olayıyla uyandıysa temsilci hazır olmalı (ADR-0065).
+            HSLocationController.shared.prepareForGeofenceEvents()
             // Oturum başında konum (yalnızca paylaşım açık, izin verilmiş ve uygulama ön plandaysa).
             Location.refresh()
         }
@@ -374,6 +377,7 @@ public enum Pushizo {
         let osName = "iOS"
         #endif
         // `push_capable` bildirim iznini yansıtır; false ise sunucu push aboneliğini `pending` tutar.
+        let bundle = Bundle.main.bundleIdentifier?.lowercased() ?? ""
         return HSDeviceInfo.make(
             model: model,
             os: osName,
@@ -383,7 +387,9 @@ public enum Pushizo {
             locale: Locale.current.identifier.replacingOccurrences(of: "_", with: "-"),
             timezone: TimeZone.current.identifier,
             pushCapable: HSPermissionTracker.isGranted(settings.authorizationStatus),
-            pushEnvironment: pushEnvironment()
+            pushEnvironment: pushEnvironment(),
+            formFactor: model.lowercased().contains("watch") ? "watch" : "phone",
+            pushKind: bundle.contains("clip") ? "app_clip" : "alert"
         )
     }
 
@@ -570,6 +576,10 @@ public enum Pushizo {
                 throw HSQueueDeferred("push aboneliği yok")
             }
             try await api.request("PATCH", "/subscriptions/\(subId)", body: HSAdsRules.body(for: op, registeredToken: store.registeredToken))
+        case HSGeofenceRules.operationType:
+            guard let subId = store.subscriptionId else { throw HSQueueDeferred("push aboneliği yok") }
+            guard let body = HSGeofenceRules.body(for: op, registeredToken: store.registeredToken) else { return }
+            try await api.request("POST", "/subscriptions/\(subId)/geofence-events", body: body)
         case HSLocationRules.operationType:
             // Daha yeni bir konum işlemi kuyruktaysa bu atlanır (son durum kazanır).
             if HSLocationRules.isSuperseded(op, queue: queue?.items ?? []) { return }
@@ -1242,6 +1252,70 @@ public enum Pushizo {
     }
 
     /// Bildirim kutusu (`add_to_inbox` mesajları). Login'de `identityHash` verildiyse isteklere eklenir.
+    /// Gömülü yerleşimler (ADR-0068): model döner, çizim uygulamanındır; içerik ekrana gelince `reportImpression` çağrılır.
+    public enum Placements {
+        /// Alanın içeriği. Abonelik yoksa veya onay bekleniyorsa boş döner; `limit` 1-10.
+        public static func list(_ key: String, limit: Int = 1) async throws -> [HSInAppMessage] {
+            guard key.range(of: "^[a-z][a-z0-9_.-]{0,63}$", options: .regularExpression) != nil else { throw HSError.invalidArgument("Geçersiz yerleşim anahtarı") }
+            guard (1...10).contains(limit) else { throw HSError.invalidArgument("limit 1-10 olmalı") }
+            guard let store = storage, let api, networkAllowed, let subId = engagementSubscriptionId() else { return [] }
+            let query = HSOwnership.subscriptionQuery(subscriptionId: subId, registeredToken: ownershipToken(store, subscriptionId: subId), identityHash: nil)
+            return HSInAppParser.parseList(try await api.request("GET", "/placements/\(key)?\(query)&supports=&limit=\(limit)"))
+        }
+
+        public static func reportImpression(_ message: HSInAppMessage) { record(message, "impression", nil) }
+        public static func reportClick(_ message: HSInAppMessage, buttonId: String) { record(message, "click", buttonId) }
+        public static func reportDismiss(_ message: HSInAppMessage) { record(message, "dismiss", nil) }
+
+        private static func record(_ message: HSInAppMessage, _ type: String, _ buttonId: String?) {
+            var op: [String: Any] = ["type": "in_app_event", "message_id": message.id, "event": type, "at": Date().timeIntervalSince1970]
+            if let buttonId { op["button_id"] = buttonId }
+            if let variantId = message.variantId { op["variant_id"] = variantId }
+            enqueue(op)
+        }
+    }
+
+    /// Özellik bayrakları: değerler oturum başında yenilenir ve cihazda saklanır (ADR-0066).
+    public enum FeatureFlags {
+        /// Değerleri hemen yeniler. Hata son değerleri korur; gizlilik onayı beklenirken istek gönderilmez.
+        @discardableResult
+        public static func refresh() async -> Bool {
+            guard let store = storage, let api, networkAllowed else { return false }
+            let subject: String
+            if let existing = store.featureFlagSubject {
+                subject = existing
+            } else {
+                subject = HSFeatureFlagRules.newSubject()
+                store.featureFlagSubject = subject
+            }
+            let subId = engagementSubscriptionId()
+            let body = HSFeatureFlagRules.body(
+                subscriptionId: subId,
+                subject: subject,
+                registeredToken: subId.flatMap { ownershipToken(store, subscriptionId: $0) },
+                identityHash: store.userIdentityHash
+            )
+            do {
+                guard let flags = HSFeatureFlagRules.parse(try await api.request("POST", "/feature-flags/evaluate", body: body)) else { return false }
+                store.featureFlags = flags
+                return true
+            } catch {
+                HSLog.log(.debug, "özellik bayrakları alınamadı: \(error.localizedDescription)")
+                return false
+            }
+        }
+
+        /// Bayrak bu kullanıcı için açık mı; değer henüz yoksa `default`.
+        public static func isEnabled(_ key: String, default fallback: Bool = false) -> Bool {
+            HSFeatureFlagRules.isEnabled(storage?.featureFlags, key: key, default: fallback)
+        }
+
+        /// Bayrağın değeri (metin, sayı, mantıksal, sözlük veya dizi); değer yoksa `default`.
+        public static func value(_ key: String, default fallback: Any? = nil) -> Any? {
+            HSFeatureFlagRules.value(storage?.featureFlags, key: key) ?? fallback
+        }
+    }
+
     public enum Inbox {
         /// `registeredToken`: aboneliğin sahiplik kanıtı kaynağı (push: kayıtlı token, e-posta/SMS: kanonik adres; ADR-0016).
         private struct Ctx { let userId: String; let subscriptionId: String; let registeredToken: String?; let identityHash: String? }

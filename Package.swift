@@ -14,5 +14,7 @@ let package = Package(
         .target(name: "Pushizo", dependencies: ["PushizoCore"], path: "Sources/Pushizo"),
         .target(name: "PushizoExtension", dependencies: ["PushizoCore"], path: "Sources/PushizoExtension"),
         .testTarget(name: "PushizoTests", dependencies: ["PushizoCore"], path: "Tests/PushizoTests"),
+        // Objective-C cephesi testleri (plan 13 Faz 29): `@import Pushizo;` ile yalnızca PZ sınıflarını kullanır.
+        .testTarget(name: "PushizoObjCTests", dependencies: ["Pushizo"], path: "Tests/PushizoObjCTests"),
     ]
 )

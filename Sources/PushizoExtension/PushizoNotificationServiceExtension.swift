@@ -42,7 +42,7 @@ public final class PushizoNotificationServiceExtension {
     public init(appId: String, apiUrl: String, appGroup: String? = nil, requiresPrivacyConsent: Bool = false) {
         let storage = HSStorage(appId: appId, appGroup: appGroup)
         // Uygulamanın App Group'a yazdığı bölgesel API kökü (ADR-0032 §4) aynı başlangıç kökü için kullanılır.
-        let api = HSApi(apiUrl: storage.resolvedApiUrl(seed: apiUrl), appId: appId, sdkVersion: "0.1.2")
+        let api = HSApi(apiUrl: storage.resolvedApiUrl(seed: apiUrl), appId: appId, sdkVersion: "0.2.0")
         api.onApiUrlChange = { [weak storage] url in storage?.saveRegionalApi(seed: apiUrl, url: url) }
         // Uygulamanın App Group'a yazdığı kimlik JWT'si NSE isteklerinde de `Authorization` başlığıyla gider (ADR-0023 §9).
         api.identityToken = { [weak storage] in storage?.identityJwt }
@@ -80,6 +80,7 @@ public final class PushizoNotificationServiceExtension {
                 group.addTask {
                     await self.registerCategory(for: n, content: mutable)
                     await self.attachImage(for: n, content: mutable)
+                    await self.attachCarousel(for: n, content: mutable)
                 }
             }
             self.finish()
@@ -138,6 +139,27 @@ public final class PushizoNotificationServiceExtension {
         } catch {
             // Resim alınamazsa bildirim resimsiz gösterilir.
         }
+    }
+
+    /// Carousel görselleri ek ek olarak iner (en fazla 5). NSE bunları zengin bildirimde gösterir.
+    private func attachCarousel(for n: HSNotification, content: UNMutableNotificationContent) async {
+        var attachments: [UNNotificationAttachment] = []
+        for (index, imageUrl) in n.carousel.prefix(5).enumerated() {
+            guard let url = URL(string: imageUrl) else { continue }
+            do {
+                let (location, response) = try await URLSession.shared.download(from: url)
+                let ext = (response.suggestedFilename as NSString?)?.pathExtension.nilIfEmpty ?? url.pathExtension.nilIfEmpty ?? "jpg"
+                let target = FileManager.default.temporaryDirectory.appendingPathComponent("hs_carousel_\(index)_\(UUID().uuidString).\(ext)")
+                try FileManager.default.moveItem(at: location, to: target)
+                attachments.append(try UNNotificationAttachment(identifier: "hs_carousel_\(index)", url: target))
+            } catch {
+                continue
+            }
+        }
+        guard !attachments.isEmpty else { return }
+        lock.lock()
+        content.attachments += attachments
+        lock.unlock()
     }
 
     private func finish() {

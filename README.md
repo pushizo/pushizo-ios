@@ -61,6 +61,12 @@ target 'NotificationService' do
 end
 ```
 
+**XCFramework:** her sürümün GitHub Release'inde `Pushizo.xcframework.zip` (iOS, simülatör, Mac Catalyst) ve sağlama
+toplamı vardır; SPM `binaryTarget` veya Xcode'da **Embed & Sign** ile kullanılır. Yerelde: `scripts/build-xcframework.sh`.
+
+**Objective-C:** `@import Pushizo;` ile `PZ` önekli cephe (`PZPushizo`, `PZUser`, `PZNotifications`, `PZInbox`,
+`PZFeatureFlags`, `PZPlacements`…). Ayrıntı: [docs.pushizo.com/docs/sdk/ios](https://docs.pushizo.com/docs/sdk/ios).
+
 ## Başlatma
 
 ```swift

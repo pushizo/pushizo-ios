@@ -30,7 +30,8 @@ extension Pushizo {
         /// Mac Catalyst'te `PLATFORM_NOT_SUPPORTED` hatasının mesajı.
         static let catalystUnsupportedMessage = "Live Activities Mac Catalyst'te desteklenmez"
 
-        #if canImport(ActivityKit) && os(iOS)
+        // ActivityKit genelleri Mac Catalyst SDK'sında kullanılamaz; bu iki API Catalyst'te derlenmez (etkisizdiler).
+        #if canImport(ActivityKit) && os(iOS) && !targetEnvironment(macCatalyst)
         /**
          Türü izlemeye alır: push-to-start belirteci (iOS 17.2+) kaydedilir; zaten çalışan ve sonradan başlayan (uzaktan
          veya yerel) her etkinliğin güncelleme belirteci `attributes.pushizo?.activityId ?? activity.id` kimliğiyle
@@ -42,11 +43,7 @@ extension Pushizo {
                 HSLog.log(.error, "LiveActivities.register: önce Pushizo.initialize çağrılmalı")
                 return
             }
-            #if targetEnvironment(macCatalyst)
-            HSLog.log(.warn, "\(catalystUnsupportedMessage); LiveActivities.register etkisiz")
-            #else
             HSLiveActivityTracker.shared.register(type)
-            #endif
         }
 
         /**
@@ -64,11 +61,7 @@ extension Pushizo {
                 HSLog.log(.error, "geçersiz activityId: 1-100 karakter; harf, rakam ve _ . : -")
                 return
             }
-            #if targetEnvironment(macCatalyst)
-            HSLog.log(.warn, "\(catalystUnsupportedMessage); LiveActivities.startTracking etkisiz")
-            #else
             HSLiveActivityTracker.shared.track(activity, activityType: String(describing: T.self), activityId: activityId)
-            #endif
         }
         #endif
 

@@ -14,7 +14,7 @@
 **Pushizo iOS SDK** — Swift package for APNs registration, users, tags and aliases, events, in-app messages, Live Activities and delivery receipts. Swift 5.9, iOS 15+ and Mac Catalyst 15+. Add `Pushizo` to the app target and `PushizoExtension` to the Notification Service Extension.
 
 ```swift
-.package(url: "https://github.com/pushizo/pushizo-ios", from: "0.1.0")
+.package(url: "https://github.com/pushizo/pushizo-ios", from: "0.2.0")
 ```
 
 ```ruby
@@ -43,11 +43,11 @@ Swift paketi. Swift 5.9, iOS 15+ ve Mac Catalyst 15+.
 ## Kurulum
 
 **Swift Package Manager:** Xcode → File → Add Package Dependencies →
-`https://github.com/pushizo/pushizo-ios` (Up to Next Major, `0.1.2`). Uygulama hedefine `Pushizo`, NSE hedefine
+`https://github.com/pushizo/pushizo-ios` (Up to Next Major, `0.2.0`). Uygulama hedefine `Pushizo`, NSE hedefine
 `PushizoExtension` ekleyin. `Package.swift` ile:
 
 ```swift
-.package(url: "https://github.com/pushizo/pushizo-ios", from: "0.1.2")
+.package(url: "https://github.com/pushizo/pushizo-ios", from: "0.2.0")
 ```
 
 **CocoaPods:**

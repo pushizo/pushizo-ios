@@ -240,6 +240,55 @@ public final class PZInboxPage: NSObject {
     }
 }
 
+/// İçerik kartı (ADR-0082); `type`: `classic`, `captioned_image`, `image_only`.
+@objc(PZContentCard)
+public final class PZContentCard: NSObject {
+    @objc public let cardId: String
+    @objc public let messageId: String?
+    @objc public let type: String
+    @objc public let title: String?
+    @objc public let body: String?
+    @objc public let url: String?
+    @objc public let imageUrl: String?
+    @objc public let buttonText: String?
+    @objc public let data: [String: String]
+    @objc public let pinned: Bool
+    @objc public let priority: Int
+    @objc public let viewed: Bool
+    @objc public let clicked: Bool
+    @objc public let expiresAt: Date?
+    @objc public let createdAt: Date?
+
+    init(_ c: HSContentCard) {
+        cardId = c.id
+        messageId = c.messageId
+        type = c.type.rawValue
+        title = c.title
+        body = c.body
+        url = c.url
+        imageUrl = c.imageUrl
+        buttonText = c.buttonText
+        data = c.data
+        pinned = c.pinned
+        priority = c.priority
+        viewed = c.viewed
+        clicked = c.clicked
+        expiresAt = c.expiresAt
+        createdAt = c.createdAt
+    }
+}
+
+@objc(PZContentCardFeed)
+public final class PZContentCardFeed: NSObject {
+    @objc public let cards: [PZContentCard]
+    @objc public let unviewedCount: Int
+
+    init(_ f: HSContentCardFeed) {
+        cards = f.cards.map(PZContentCard.init)
+        unviewedCount = f.unviewedCount
+    }
+}
+
 @objc(PZPreference)
 public final class PZPreference: NSObject {
     @objc public let category: String
@@ -690,6 +739,31 @@ public final class PZInbox: NSObject {
     @objc(unreadCountWithCompletion:)
     public static func unreadCount(completion: @escaping (NSNumber?, NSError?) -> Void) {
         complete(completion) { NSNumber(value: try await Pushizo.Inbox.unreadCount()) }
+    }
+}
+
+/// İçerik kartları (ADR-0082): gösterimde `logImpression`, tıklamada `logClick`, kapatmada `dismiss`.
+@objc(PZContentCards)
+public final class PZContentCards: NSObject {
+    /// Kart akışı (sabitlenmiş → öncelik → yeni); `limit` 1–100.
+    @objc(listWithLimit:completion:)
+    public static func list(limit: Int, completion: @escaping (PZContentCardFeed?, NSError?) -> Void) {
+        complete(completion) { PZContentCardFeed(try await Pushizo.ContentCards.list(limit: limit)) }
+    }
+
+    @objc(logImpression:completion:)
+    public static func logImpression(_ cardId: String, completion: @escaping (PZContentCard?, NSError?) -> Void) {
+        complete(completion) { PZContentCard(try await Pushizo.ContentCards.logImpression(cardId)) }
+    }
+
+    @objc(logClick:completion:)
+    public static func logClick(_ cardId: String, completion: @escaping (PZContentCard?, NSError?) -> Void) {
+        complete(completion) { PZContentCard(try await Pushizo.ContentCards.logClick(cardId)) }
+    }
+
+    @objc(dismiss:completion:)
+    public static func dismiss(_ cardId: String, completion: @escaping (PZContentCard?, NSError?) -> Void) {
+        complete(completion) { PZContentCard(try await Pushizo.ContentCards.dismiss(cardId)) }
     }
 }
 

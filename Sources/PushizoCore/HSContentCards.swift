@@ -63,3 +63,47 @@ public enum HSContentCardParser {
         )
     }
 }
+
+/// Hazır kart görünümünün (HSContentCardsView) arayüzden bağımsız yerleşim kuralları (ADR-0082).
+public enum HSContentCardLayout {
+    public enum Part: Equatable { case image, text, button }
+
+    /// Klasik kart metin (+düğme); görselli kartta görsel üstte; yalnız görsel kartta metin yok. Görseli olmayan
+    /// görsel kartı metne düşer (boş kart gösterilmez).
+    public static func parts(_ card: HSContentCard) -> [Part] {
+        let hasImage = !(card.imageUrl ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+        let hasText = !(card.title ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+            || !(card.body ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+        var result: [Part] = []
+        switch card.type {
+        case .imageOnly: result.append(hasImage ? .image : .text)
+        case .captionedImage:
+            if hasImage { result.append(.image) }
+            if hasText || !hasImage { result.append(.text) }
+        case .classic: result.append(.text)
+        }
+        if result.contains(.text), !(card.buttonText ?? "").trimmingCharacters(in: .whitespaces).isEmpty { result.append(.button) }
+        return result
+    }
+
+    /// Kartın en az yarısı görünürse gösterim sayılır.
+    public static func countsAsImpression(visibleHeight: Double, totalHeight: Double) -> Bool {
+        totalHeight > 0 && visibleHeight * 2 >= totalHeight
+    }
+}
+
+/// Hazır kart görünümü metinleri (Türkçe veya İngilizce; dil tercihinden seçilir).
+public struct HSContentCardStrings: Equatable {
+    public let empty: String
+    public let error: String
+    public let retry: String
+    public let dismiss: String
+    public let pinned: String
+
+    public static func forLanguage(_ language: String?) -> HSContentCardStrings {
+        if (language ?? "en").lowercased().hasPrefix("tr") {
+            return HSContentCardStrings(empty: "Henüz kart yok", error: "Kartlar yüklenemedi.", retry: "Tekrar dene", dismiss: "Kartı kapat", pinned: "Sabitlendi")
+        }
+        return HSContentCardStrings(empty: "No cards yet", error: "Cards could not be loaded.", retry: "Try again", dismiss: "Dismiss card", pinned: "Pinned")
+    }
+}

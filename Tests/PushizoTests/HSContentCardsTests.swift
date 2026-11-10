@@ -31,4 +31,30 @@ final class HSContentCardsTests: XCTestCase {
     func testCardWithoutIdIsSkipped() {
         XCTAssertNil(HSContentCardParser.parseCard(["title": "kimliksiz"]))
     }
+
+    private func card(_ type: String, title: String? = "Başlık", image: String? = nil, button: String? = nil) -> HSContentCard {
+        var json: [String: Any] = ["id": "cc_1", "type": type]
+        if let title { json["title"] = title }
+        if let image { json["image_url"] = image }
+        if let button { json["button_text"] = button }
+        return HSContentCardParser.parseCard(json)!
+    }
+
+    /// Hazır görünüm yerleşimi; Android `HsContentCardsLayoutTest` ile aynı kurallar.
+    func testLayoutPartsFollowCardType() {
+        XCTAssertEqual(HSContentCardLayout.parts(card("classic", image: "https://x/a.png", button: "Aç")), [.text, .button])
+        XCTAssertEqual(HSContentCardLayout.parts(card("captioned_image", image: "https://x/a.png")), [.image, .text])
+        XCTAssertEqual(HSContentCardLayout.parts(card("captioned_image", title: nil, image: "https://x/a.png")), [.image])
+        XCTAssertEqual(HSContentCardLayout.parts(card("captioned_image")), [.text])
+        XCTAssertEqual(HSContentCardLayout.parts(card("image_only", image: "https://x/a.png", button: "Aç")), [.image])
+        XCTAssertEqual(HSContentCardLayout.parts(card("image_only", button: "Aç")), [.text, .button])
+    }
+
+    func testImpressionNeedsHalfVisibleAndStringsFollowLanguage() {
+        XCTAssertTrue(HSContentCardLayout.countsAsImpression(visibleHeight: 50, totalHeight: 100))
+        XCTAssertFalse(HSContentCardLayout.countsAsImpression(visibleHeight: 49, totalHeight: 100))
+        XCTAssertFalse(HSContentCardLayout.countsAsImpression(visibleHeight: 0, totalHeight: 0))
+        XCTAssertEqual(HSContentCardStrings.forLanguage("tr-TR").retry, "Tekrar dene")
+        XCTAssertEqual(HSContentCardStrings.forLanguage("de").retry, "Try again")
+    }
 }

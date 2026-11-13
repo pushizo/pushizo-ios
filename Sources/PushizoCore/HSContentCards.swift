@@ -92,7 +92,7 @@ public enum HSContentCardLayout {
     }
 }
 
-/// Hazır kart görünümü metinleri (Türkçe veya İngilizce; dil tercihinden seçilir).
+/// Hazır kart görünümü metinleri (22 dil, `HSStrings`; dil verilmezse cihaz dili).
 public struct HSContentCardStrings: Equatable {
     public let empty: String
     public let error: String
@@ -101,9 +101,13 @@ public struct HSContentCardStrings: Equatable {
     public let pinned: String
 
     public static func forLanguage(_ language: String?) -> HSContentCardStrings {
-        if (language ?? "en").lowercased().hasPrefix("tr") {
-            return HSContentCardStrings(empty: "Henüz kart yok", error: "Kartlar yüklenemedi.", retry: "Tekrar dene", dismiss: "Kartı kapat", pinned: "Sabitlendi")
-        }
-        return HSContentCardStrings(empty: "No cards yet", error: "Cards could not be loaded.", retry: "Try again", dismiss: "Dismiss card", pinned: "Pinned")
+        let code = language.map(HSStrings.resolve) ?? HSStrings.deviceLanguage
+        return HSContentCardStrings(
+            empty: HSStrings.text("cards_empty", language: code),
+            error: HSStrings.text("cards_error", language: code),
+            retry: HSStrings.text("cards_retry", language: code),
+            dismiss: HSStrings.text("cards_dismiss", language: code),
+            pinned: HSStrings.text("cards_pinned", language: code)
+        )
     }
 }

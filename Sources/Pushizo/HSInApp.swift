@@ -878,6 +878,6 @@ final class HSInAppViewController: UIViewController {
     }
 
     static var closeLabel: String {
-        (Locale.preferredLanguages.first ?? "en").lowercased().hasPrefix("tr") ? "Kapat" : "Close"
+        HSStrings.text("in_app_close")
     }
 }

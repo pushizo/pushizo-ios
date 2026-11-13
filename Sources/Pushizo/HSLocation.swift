@@ -347,7 +347,7 @@ final class HSLocationController: NSObject, CLLocationManagerDelegate {
     }
 }
 
-/// Açıklama uyarısı metinleri (cihaz dili Türkçe ise Türkçe, değilse İngilizce; Android SDK metinleriyle aynı).
+/// Açıklama uyarısı metinleri (cihaz dili; 22 dil `HSStrings`, Android SDK metinleriyle aynı kaynak).
 struct HSLocationTexts {
     let title: String
     let message: String
@@ -355,19 +355,11 @@ struct HSLocationTexts {
     let cancel: String
 
     static var current: HSLocationTexts {
-        let language = Locale.preferredLanguages.first?.lowercased() ?? "en"
-        return language.hasPrefix("tr")
-            ? HSLocationTexts(
-                title: "Konumunuzu paylaşın",
-                message: "Yakınınızdaki ilgili bildirimleri gönderebilmek için yaklaşık konumunuzu yalnızca uygulama açıkken kullanırız. Bu ayarı istediğiniz zaman kapatabilirsiniz.",
-                accept: "Devam",
-                cancel: "Şimdi değil"
-            )
-            : HSLocationTexts(
-                title: "Share your location",
-                message: "We use your approximate location only while the app is open, to send you relevant nearby notifications. You can turn this off at any time.",
-                accept: "Continue",
-                cancel: "Not now"
-            )
+        HSLocationTexts(
+            title: HSStrings.text("location_rationale_title"),
+            message: HSStrings.text("location_rationale_message"),
+            accept: HSStrings.text("location_rationale_continue"),
+            cancel: HSStrings.text("location_rationale_not_now")
+        )
     }
 }

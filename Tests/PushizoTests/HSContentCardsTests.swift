@@ -55,6 +55,8 @@ final class HSContentCardsTests: XCTestCase {
         XCTAssertFalse(HSContentCardLayout.countsAsImpression(visibleHeight: 49, totalHeight: 100))
         XCTAssertFalse(HSContentCardLayout.countsAsImpression(visibleHeight: 0, totalHeight: 0))
         XCTAssertEqual(HSContentCardStrings.forLanguage("tr-TR").retry, "Tekrar dene")
-        XCTAssertEqual(HSContentCardStrings.forLanguage("de").retry, "Try again")
+        // Desteklenmeyen dil İngilizceye düşer; desteklenen dil kendi metnini alır (HSStrings, ADR-0084).
+        XCTAssertEqual(HSContentCardStrings.forLanguage("fi").retry, "Try again")
+        XCTAssertEqual(HSContentCardStrings.forLanguage("pt").retry, HSStrings.text("cards_retry", language: "pt-BR"))
     }
 }

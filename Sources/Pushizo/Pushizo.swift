@@ -1377,6 +1377,51 @@ public enum Pushizo {
         public static func unreadCount() async throws -> Int { try await list(limit: 1).unreadCount }
     }
 
+    /// İçerik kartları (ADR-0082): kalıcı kart akışı (`content_card` mesajları). Kartlar bildirim kutusu listesinde
+    /// görünmez. Gösterimde `logImpression`, tıklamada `logClick`, kapatmada `dismiss` çağrılır.
+    public enum ContentCards {
+        private struct Ctx { let userId: String; let subscriptionId: String; let registeredToken: String?; let identityHash: String? }
+
+        private static func ctx() throws -> (Ctx, HSApi) {
+            guard let store = storage, let api else { throw HSError.notInitialized }
+            guard let subId = engagementSubscriptionId() else { throw HSError.noSubscription }
+            guard let userId = store.userId else { throw HSError.noUser }
+            return (Ctx(userId: userId, subscriptionId: subId, registeredToken: ownershipToken(store, subscriptionId: subId), identityHash: store.userIdentityHash), api)
+        }
+
+        private static func enc(_ value: String) -> String { value.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? value }
+        private static func base(_ c: Ctx) -> String { "/users/\(enc(c.userId))/cards" }
+
+        private static func event(_ id: String, _ name: String) async throws -> HSContentCard {
+            let (c, api) = try ctx()
+            let body = HSOwnership.subscriptionBody(subscriptionId: c.subscriptionId, registeredToken: c.registeredToken, identityHash: c.identityHash)
+            guard let card = HSContentCardParser.parseCard(try await api.request("POST", "\(base(c))/\(enc(id))/\(name)", body: body)) else {
+                throw HSError.invalidResponse
+            }
+            return card
+        }
+
+        /// Kart akışı (sabitlenmiş → öncelik → yeni; `limit` 1-100).
+        public static func list(limit: Int = 50) async throws -> HSContentCardFeed {
+            guard (1...100).contains(limit) else { throw HSError.invalidArgument("limit 1-100 olmalı") }
+            let (c, api) = try ctx()
+            let query = HSOwnership.subscriptionQuery(subscriptionId: c.subscriptionId, registeredToken: c.registeredToken, identityHash: c.identityHash)
+            return HSContentCardParser.parseFeed(try await api.request("GET", "\(base(c))?\(query)&limit=\(limit)"))
+        }
+
+        /// Kart ekranda gösterildi (ilk gösterim kaydedilir).
+        @discardableResult
+        public static func logImpression(_ id: String) async throws -> HSContentCard { try await event(id, "impression") }
+
+        /// Karta tıklandı (gösterim ve okundu da sayılır).
+        @discardableResult
+        public static func logClick(_ id: String) async throws -> HSContentCard { try await event(id, "click") }
+
+        /// Kart kapatıldı; akıştan kalkar.
+        @discardableResult
+        public static func dismiss(_ id: String) async throws -> HSContentCard { try await event(id, "dismiss") }
+    }
+
     public enum Debug {
         public static func setLogLevel(_ level: HSLog.Level) { HSLog.level = level }
     }

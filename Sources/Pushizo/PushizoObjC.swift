@@ -10,7 +10,7 @@ import UserNotifications
  Objective-C'ye açık değildir; bu dosya aynı yüzeyi `PZ` önekli NSObject sınıfları, sınıf metotları ve completion
  block'larıyla sunar. Objective-C projesi yalnızca `@import Pushizo;` ile kullanır. Mantık burada yeniden yazılmaz:
  her çağrı Swift API'sine devreder. Completion block'ları ana iş parçacığında çağrılır. Swift'e özgü kalanlar (Live
- Activities ActivityKit genelleri, özel in-app çizici, canlı sohbet) Swift API'sinden kullanılır.
+ Activities ActivityKit genelleri, özel in-app çizici) Swift API'sinden kullanılır.
  */
 
 /// Hata alanı ve kodları (`NSError.domain` = `PZErrorDomain`).
@@ -21,18 +21,33 @@ public enum PZErrorCode: Int {
     case noUser = 3
     case invalidArgument = 4
     case invalidResponse = 5
+    /// Platform ya da iOS sürümü özelliği desteklemiyor (ör. Mac Catalyst'te Live Activities).
+    case notSupported = 6
+    /// Sistem isteği yerine getiremedi (ör. Live Activity başlatılamadı).
+    case requestFailed = 7
 }
 
 @objc(PZErrors)
 public final class PZErrors: NSObject {
     @objc public static let domain = "PZErrorDomain"
+    /// Live Activity hatalarında çapraz platform hata kodu (`NSString`; ör. `PLATFORM_NOT_SUPPORTED`).
+    @objc public static let codeKey = "PZErrorCode"
 
     /// Swift hatasını Objective-C'ye uygun `NSError`'a çevirir; SDK dışı hatalar olduğu gibi döner.
     static func bridge(_ error: Error) -> NSError {
-        guard let e = error as? HSError else { return error as NSError }
-        func make(_ code: PZErrorCode, _ message: String) -> NSError {
-            NSError(domain: domain, code: code.rawValue, userInfo: [NSLocalizedDescriptionKey: message])
+        func make(_ code: PZErrorCode, _ message: String, _ extra: [String: Any] = [:]) -> NSError {
+            NSError(domain: domain, code: code.rawValue, userInfo: extra.merging([NSLocalizedDescriptionKey: message]) { _, new in new })
         }
+        if let chat = error as? HSChatError, case let .invalidArgument(message) = chat { return make(.invalidArgument, message) }
+        if let live = error as? HSLiveActivityError {
+            switch live {
+            case let .notSupported(message): return make(.notSupported, message, [codeKey: live.code])
+            case .notInitialized: return make(.notInitialized, "Pushizo.initialize önce çağrılmalı.", [codeKey: live.code])
+            case let .invalidArgument(message): return make(.invalidArgument, message, [codeKey: live.code])
+            case let .requestFailed(message): return make(.requestFailed, message, [codeKey: live.code])
+            }
+        }
+        guard let e = error as? HSError else { return error as NSError }
         switch e {
         case .notInitialized: return make(.notInitialized, "Pushizo.initialize önce çağrılmalı.")
         case .noSubscription: return make(.noSubscription, "Abonelik henüz kaydedilmedi veya gizlilik onayı bekleniyor.")
@@ -136,8 +151,11 @@ public final class PZNotification: NSObject {
     @objc public let actions: [PZNotificationAction]
     @objc public let data: [String: String]
     @objc public let carousel: [String]
+    /// Bildirim isteğinin kimliği (`UNNotificationRequest.identifier`); `[PZNotifications removeNotification:]` ile kullanılır.
+    @objc public let identifier: String?
 
     init(_ n: HSNotification) {
+        identifier = n.identifier
         title = n.title
         body = n.body
         imageUrl = n.imageUrl
@@ -225,6 +243,31 @@ public final class PZInboxItem: NSObject {
     }
 }
 
+/// `PZInbox.addObserver` olayı; `type`: `listed`, `read`, `read_all`, `archived` veya `count`.
+@objc(PZInboxChangeEvent)
+public final class PZInboxChangeEvent: NSObject {
+    @objc public let type: String
+    @objc public let itemId: String?
+    @objc public let unreadCount: Int
+
+    init(_ e: HSInboxChangeEvent) {
+        type = e.type.rawValue
+        itemId = e.itemId
+        unreadCount = e.unreadCount
+    }
+}
+
+/// Girişle birlikte ayarlanan profil (`HSUserProfile` karşılığı).
+@objc(PZUserProfile)
+public final class PZUserProfile: NSObject {
+    @objc public var email: String?
+    @objc public var sms: String?
+    @objc public var tags: [String: String] = [:]
+    @objc public var aliases: [String: String] = [:]
+
+    var native: HSUserProfile { HSUserProfile(email: email, sms: sms, tags: tags, aliases: aliases) }
+}
+
 @objc(PZInboxPage)
 public final class PZInboxPage: NSObject {
     @objc public let items: [PZInboxItem]
@@ -237,6 +280,55 @@ public final class PZInboxPage: NSObject {
         unreadCount = p.unreadCount
         nextCursor = p.nextCursor
         hasMore = p.hasMore
+    }
+}
+
+/// İçerik kartı (ADR-0082); `type`: `classic`, `captioned_image`, `image_only`.
+@objc(PZContentCard)
+public final class PZContentCard: NSObject {
+    @objc public let cardId: String
+    @objc public let messageId: String?
+    @objc public let type: String
+    @objc public let title: String?
+    @objc public let body: String?
+    @objc public let url: String?
+    @objc public let imageUrl: String?
+    @objc public let buttonText: String?
+    @objc public let data: [String: String]
+    @objc public let pinned: Bool
+    @objc public let priority: Int
+    @objc public let viewed: Bool
+    @objc public let clicked: Bool
+    @objc public let expiresAt: Date?
+    @objc public let createdAt: Date?
+
+    init(_ c: HSContentCard) {
+        cardId = c.id
+        messageId = c.messageId
+        type = c.type.rawValue
+        title = c.title
+        body = c.body
+        url = c.url
+        imageUrl = c.imageUrl
+        buttonText = c.buttonText
+        data = c.data
+        pinned = c.pinned
+        priority = c.priority
+        viewed = c.viewed
+        clicked = c.clicked
+        expiresAt = c.expiresAt
+        createdAt = c.createdAt
+    }
+}
+
+@objc(PZContentCardFeed)
+public final class PZContentCardFeed: NSObject {
+    @objc public let cards: [PZContentCard]
+    @objc public let unviewedCount: Int
+
+    init(_ f: HSContentCardFeed) {
+        cards = f.cards.map(PZContentCard.init)
+        unviewedCount = f.unviewedCount
     }
 }
 
@@ -465,6 +557,12 @@ public final class PZPushizo: NSObject {
     @objc(loginWithExternalId:)
     public static func login(externalId: String) { Pushizo.login(externalId) }
 
+    /// Profille giriş: profil ya da kimlik kanıtı geçersizse giriş yapılmaz, NO döner ve `error` dolar.
+    @objc(loginWithExternalId:profile:identityHash:jwt:error:)
+    public static func login(externalId: String, profile: PZUserProfile, identityHash: String?, jwt: String?) throws {
+        do { try Pushizo.login(externalId, profile: profile.native, identityHash: identityHash, jwt: jwt) } catch { throw PZErrors.bridge(error) }
+    }
+
     @objc public static func logout() { Pushizo.logout() }
 
     @objc(updateUserJwt:error:)
@@ -495,6 +593,10 @@ public final class PZUser: NSObject {
     @objc public static func removeAlias(_ label: String) { Pushizo.User.removeAlias(label) }
 
     @objc public static func setLanguage(_ code: String) { Pushizo.User.setLanguage(code) }
+
+    /// Kullanıcı özelliği yazar (`NSString`, `NSNumber`, `NSArray`, `NSDictionary`); `nil` özelliği siler.
+    @objc(setProperty:value:)
+    public static func setProperty(_ key: String, value: Any?) { Pushizo.User.setProperty(key, value) }
     @objc public static func addEmail(_ email: String) { Pushizo.User.addEmail(email) }
     @objc public static func removeEmail(_ email: String) { Pushizo.User.removeEmail(email) }
     @objc public static func addSms(_ phoneNumber: String) { Pushizo.User.addSms(phoneNumber) }
@@ -614,6 +716,12 @@ public final class PZSession: NSObject {
     public static func sendEvent(_ name: String, properties: [String: Any]?, value: NSNumber?) {
         Pushizo.Session.sendEvent(name, properties: properties ?? [:], value: value?.doubleValue)
     }
+
+    /// `eventId`: tekilleştirme kimliği (8-64 karakter, harf, rakam ve `._:-`); nil ya da geçersizse SDK üretir.
+    @objc(sendEvent:properties:value:eventId:)
+    public static func sendEvent(_ name: String, properties: [String: Any]?, value: NSNumber?, eventId: String?) {
+        Pushizo.Session.sendEvent(name, properties: properties ?? [:], value: value?.doubleValue, eventId: eventId)
+    }
 }
 
 @objc(PZInAppMessages)
@@ -638,12 +746,98 @@ public final class PZInAppMessages: NSObject {
         let token = Pushizo.InAppMessages.addClickListener { listener(PZInAppClickEvent($0)) }
         return PZListenerToken { Pushizo.InAppMessages.removeClickListener(token) }
     }
+
+    private static let lifecycleLock = NSLock()
+    private static var lifecycleAdapters: [ObjectIdentifier: PZInAppLifecycleAdapter] = [:]
+
+    /// Yaşam döngüsü dinleyicisi (ana iş parçacığında). Dinleyici zayıf referansla tutulur; aynı nesne bir kez kaydedilir.
+    @objc(addLifecycleListener:)
+    @discardableResult
+    public static func addLifecycleListener(_ listener: PZInAppLifecycleListener) -> PZListenerToken {
+        let key = ObjectIdentifier(listener)
+        lifecycleLock.lock()
+        let existing = lifecycleAdapters[key]
+        let adapter = existing ?? PZInAppLifecycleAdapter(listener)
+        lifecycleAdapters[key] = adapter
+        lifecycleLock.unlock()
+        if existing == nil { Pushizo.InAppMessages.addLifecycleListener(adapter) }
+        return PZListenerToken { [weak listener] in
+            if let listener { removeLifecycleListener(listener) } else { removeLifecycleAdapter(key) }
+        }
+    }
+
+    @objc(removeLifecycleListener:)
+    public static func removeLifecycleListener(_ listener: PZInAppLifecycleListener) {
+        removeLifecycleAdapter(ObjectIdentifier(listener))
+    }
+
+    private static func removeLifecycleAdapter(_ key: ObjectIdentifier) {
+        lifecycleLock.lock()
+        let adapter = lifecycleAdapters.removeValue(forKey: key)
+        lifecycleLock.unlock()
+        if let adapter { Pushizo.InAppMessages.removeLifecycleListener(adapter) }
+    }
+}
+
+/// In-app yaşam döngüsü dinleyicisi (`HSInAppLifecycleListener` karşılığı); tüm metotlar isteğe bağlıdır.
+@objc(PZInAppLifecycleListener)
+public protocol PZInAppLifecycleListener: NSObjectProtocol {
+    @objc optional func onWillDisplay(_ message: PZInAppMessage)
+    @objc optional func onDidDisplay(_ message: PZInAppMessage)
+    @objc optional func onWillDismiss(_ message: PZInAppMessage)
+    @objc optional func onDidDismiss(_ message: PZInAppMessage)
+}
+
+/// Objective-C dinleyicisini Swift protokolüne uyarlar; cephe güçlü tutar, asıl dinleyici zayıf kalır.
+final class PZInAppLifecycleAdapter: HSInAppLifecycleListener {
+    private weak var listener: PZInAppLifecycleListener?
+
+    init(_ listener: PZInAppLifecycleListener) { self.listener = listener }
+
+    func onWillDisplay(_ message: HSInAppMessage) { listener?.onWillDisplay?(PZInAppMessage(message)) }
+    func onDidDisplay(_ message: HSInAppMessage) { listener?.onDidDisplay?(PZInAppMessage(message)) }
+    func onWillDismiss(_ message: HSInAppMessage) { listener?.onWillDismiss?(PZInAppMessage(message)) }
+    func onDidDismiss(_ message: HSInAppMessage) { listener?.onDidDismiss?(PZInAppMessage(message)) }
+}
+
+/// Mobil reklam kimliği (IDFA; ADR-0037). SDK ATT istemi içermez: izni uygulama alır ve kimliği verir.
+@objc(PZAds)
+public final class PZAds: NSObject {
+    /// Reklam kimliğini yazar; `nil` veya sıfır kimlik sunucudaki kaydı siler.
+    @objc public static func setAdvertisingId(_ advertisingId: String?) { Pushizo.Ads.setAdvertisingId(advertisingId) }
+}
+
+/// Live Activities'in genel türü (köprüler için). ActivityKit genelleri (`register`, `startTracking`) Swift'ten kullanılır.
+@objc(PZLiveActivities)
+public final class PZLiveActivities: NSObject {
+    /// Genel türün `activity_type` değeri.
+    @objc public static var defaultActivityType: String { Pushizo.LiveActivities.defaultActivityType }
+
+    /// Genel türü kaydeder. iOS 16.1 öncesinde ve Mac Catalyst'te `PZErrorCodeNotSupported`, başlatılmamış SDK'da
+    /// `PZErrorCodeNotInitialized`.
+    @objc(setupDefaultLiveActivityAndReturnError:)
+    public static func setupDefaultLiveActivity() throws {
+        do { try Pushizo.LiveActivities.setupDefaultLiveActivity() } catch { throw PZErrors.bridge(error) }
+    }
+
+    /// Genel türle yerel etkinlik başlatır; değerler `NSString` veya `NSNumber` (anahtar 1-64 karakter).
+    /// Hata: `PZErrorCodeInvalidArgument`, `NotSupported`, `NotInitialized`, `RequestFailed`.
+    @objc(startDefaultLiveActivityWithActivityId:attributes:contentState:error:)
+    public static func startDefaultLiveActivity(activityId: String, attributes: [String: Any], contentState: [String: Any]) throws {
+        do {
+            try Pushizo.LiveActivities.startDefaultLiveActivity(activityId: activityId, attributes: attributes, contentState: contentState)
+        } catch { throw PZErrors.bridge(error) }
+    }
 }
 
 @objc(PZLocation)
 public final class PZLocation: NSObject {
     @objc public static var isShared: Bool { Pushizo.Location.isShared }
     @objc public static func setShared(_ shared: Bool) { Pushizo.Location.setShared(shared) }
+    /// Konum izni ("kullanırken" veya "her zaman") verilmiş mi; istem göstermez.
+    @objc public static var permissionGranted: Bool { Pushizo.Location.permissionGranted }
+    /// Arka plan ("her zaman") konum izni verilmiş mi; istem göstermez.
+    @objc public static var backgroundPermissionGranted: Bool { Pushizo.Location.backgroundPermissionGranted }
 
     @objc(requestPermissionWithRationale:completion:)
     public static func requestPermission(rationale: String?, completion: @escaping (Bool) -> Void) {
@@ -691,6 +885,43 @@ public final class PZInbox: NSObject {
     public static func unreadCount(completion: @escaping (NSNumber?, NSError?) -> Void) {
         complete(completion) { NSNumber(value: try await Pushizo.Inbox.unreadCount()) }
     }
+
+    /// Kutu değişim gözlemcisi (ana iş parçacığında); `[token remove]` ile kaldırılır.
+    @objc(addObserver:)
+    @discardableResult
+    public static func addObserver(_ observer: @escaping (PZInboxChangeEvent) -> Void) -> PZListenerToken {
+        let token = Pushizo.Inbox.addObserver { observer(PZInboxChangeEvent($0)) }
+        return PZListenerToken { Pushizo.Inbox.removeObserver(token) }
+    }
+
+    /// `[token remove]` ile aynı.
+    @objc(removeObserver:)
+    public static func removeObserver(_ token: PZListenerToken) { token.remove() }
+}
+
+/// İçerik kartları (ADR-0082): gösterimde `logImpression`, tıklamada `logClick`, kapatmada `dismiss`.
+@objc(PZContentCards)
+public final class PZContentCards: NSObject {
+    /// Kart akışı (sabitlenmiş → öncelik → yeni); `limit` 1–100.
+    @objc(listWithLimit:completion:)
+    public static func list(limit: Int, completion: @escaping (PZContentCardFeed?, NSError?) -> Void) {
+        complete(completion) { PZContentCardFeed(try await Pushizo.ContentCards.list(limit: limit)) }
+    }
+
+    @objc(logImpression:completion:)
+    public static func logImpression(_ cardId: String, completion: @escaping (PZContentCard?, NSError?) -> Void) {
+        complete(completion) { PZContentCard(try await Pushizo.ContentCards.logImpression(cardId)) }
+    }
+
+    @objc(logClick:completion:)
+    public static func logClick(_ cardId: String, completion: @escaping (PZContentCard?, NSError?) -> Void) {
+        complete(completion) { PZContentCard(try await Pushizo.ContentCards.logClick(cardId)) }
+    }
+
+    @objc(dismiss:completion:)
+    public static func dismiss(_ cardId: String, completion: @escaping (PZContentCard?, NSError?) -> Void) {
+        complete(completion) { PZContentCard(try await Pushizo.ContentCards.dismiss(cardId)) }
+    }
 }
 
 @objc(PZFeatureFlags)
@@ -714,6 +945,393 @@ public final class PZFeatureFlags: NSObject {
     public static func value(_ key: String, defaultValue: Any?) -> Any? {
         Pushizo.FeatureFlags.value(key, default: defaultValue)
     }
+
+    /// Bayrak değerleri her yenilendiğinde ana iş parçacığında çağrılır; `[token remove]` ile kaldırılır.
+    @objc(addObserver:)
+    @discardableResult
+    public static func addObserver(_ observer: @escaping () -> Void) -> PZListenerToken {
+        let token = Pushizo.FeatureFlags.addObserver(observer)
+        return PZListenerToken { Pushizo.FeatureFlags.removeObserver(token) }
+    }
+
+    /// `[token remove]` ile aynı.
+    @objc(removeObserver:)
+    public static func removeObserver(_ token: PZListenerToken) { token.remove() }
+}
+
+// MARK: - Canlı sohbet
+
+@objc(PZChatAttachment)
+public final class PZChatAttachment: NSObject {
+    @objc public let attachmentId: String
+    @objc public let name: String
+    /// MIME türü.
+    @objc public let type: String
+    @objc public let size: Int
+
+    init(_ a: HSChatAttachment) {
+        attachmentId = a.id
+        name = a.name
+        type = a.type
+        size = a.size
+    }
+}
+
+/// Bot sorusunun hızlı yanıt seçeneği; seçilince `sendMessage:optionId:` ile gönderilir.
+@objc(PZChatQuickReply)
+public final class PZChatQuickReply: NSObject {
+    @objc public let replyId: String
+    @objc public let label: String
+
+    init(_ r: HSChatQuickReply) {
+        replyId = r.id
+        label = r.label
+    }
+}
+
+@objc(PZChatMessage)
+public final class PZChatMessage: NSObject {
+    /// Sunucu kimliği; bekleyen yerel mesajda nil.
+    @objc public let messageId: String?
+    /// Konuşma içi sıra numarası; bekleyen yerel mesajda 0.
+    @objc public let seq: Int
+    @objc public let clientMessageId: String?
+    /// `visitor`, `agent`, `bot` veya `system`.
+    @objc public let sender: String
+    @objc public let authorName: String?
+    @objc public let text: String?
+    @objc public let attachments: [PZChatAttachment]
+    /// Bot sorusunun seçenekleri (yoksa boş).
+    @objc public let quickReplies: [PZChatQuickReply]
+    /// `pending` (yerel), `sent`, `delivered` veya `read`.
+    @objc public let status: String
+    @objc public let createdAt: Date?
+    @objc public let isFromVisitor: Bool
+    /// Köprüler için sözlük (camelCase; boş değerler `NSNull`, zaman epoch milisaniye).
+    @objc public let dictionary: [String: Any]
+
+    init(_ m: HSChatMessage) {
+        messageId = m.id
+        seq = m.seq
+        clientMessageId = m.clientMessageId
+        sender = m.sender
+        authorName = m.authorName
+        text = m.text
+        attachments = m.attachments.map(PZChatAttachment.init)
+        quickReplies = (m.quickReplies ?? []).map(PZChatQuickReply.init)
+        status = m.status
+        createdAt = m.createdAt
+        isFromVisitor = m.isFromVisitor
+        dictionary = m.dictionary
+    }
+}
+
+@objc(PZChatConversation)
+public final class PZChatConversation: NSObject {
+    @objc public let conversationId: String
+    /// `open`, `pending` veya `resolved`.
+    @objc public let status: String
+    @objc public let lastSeq: Int
+    @objc public let agentLastReadSeq: Int
+    @objc public let visitorLastReadSeq: Int
+    @objc public let unreadCount: Int
+    @objc public let botActive: Bool
+    @objc public let assigneeName: String?
+    @objc public let createdAt: Date?
+    @objc public let dictionary: [String: Any]
+
+    init(_ c: HSChatConversation) {
+        conversationId = c.id
+        status = c.status
+        lastSeq = c.lastSeq
+        agentLastReadSeq = c.agentLastReadSeq
+        visitorLastReadSeq = c.visitorLastReadSeq
+        unreadCount = c.unreadCount
+        botActive = c.botActive
+        assigneeName = c.assigneeName
+        createdAt = c.createdAt
+        dictionary = c.dictionary
+    }
+}
+
+/// Konuşma (henüz yoksa nil) ve okunmamış sayısı.
+@objc(PZChatConversationState)
+public final class PZChatConversationState: NSObject {
+    @objc public let conversation: PZChatConversation?
+    @objc public let unreadCount: Int
+
+    init(_ s: HSChatConversationState) {
+        conversation = s.conversation.map(PZChatConversation.init)
+        unreadCount = s.unreadCount
+    }
+}
+
+@objc(PZChatMessagePage)
+public final class PZChatMessagePage: NSObject {
+    /// Kronolojik sırada.
+    @objc public let messages: [PZChatMessage]
+    @objc public let hasMore: Bool
+
+    init(_ p: HSChatMessagePage) {
+        messages = p.messages.map(PZChatMessage.init)
+        hasMore = p.hasMore
+    }
+}
+
+@objc(PZChatIdentifyResult)
+public final class PZChatIdentifyResult: NSObject {
+    @objc public let userId: String?
+    @objc public let conversation: PZChatConversation?
+
+    init(_ r: HSChatIdentifyResult) {
+        userId = r.userId
+        conversation = r.conversation.map(PZChatConversation.init)
+    }
+}
+
+/// Sohbet ayarları ve çevrimiçi durumu.
+@objc(PZChatConfig)
+public final class PZChatConfig: NSObject {
+    @objc public let enabled: Bool
+    @objc public let online: Bool
+    @objc public let withinBusinessHours: Bool
+    @objc public let color: String?
+    @objc public let textColor: String?
+    @objc public let position: String
+    @objc public let theme: String
+    @objc public let title: String?
+    @objc public let greeting: String?
+    @objc public let offlineMessage: String?
+    @objc public let collectEmailOffline: Bool
+    @objc public let requireEmail: Bool
+    @objc public let attachmentsEnabled: Bool
+    @objc public let attachmentMaxBytes: Int
+    @objc public let attachmentTypes: [String]
+    @objc public let language: String
+    @objc public let dictionary: [String: Any]
+
+    init(_ c: HSChatConfig) {
+        enabled = c.enabled
+        online = c.online
+        withinBusinessHours = c.withinBusinessHours
+        color = c.color
+        textColor = c.textColor
+        position = c.position
+        theme = c.theme
+        title = c.title
+        greeting = c.greeting
+        offlineMessage = c.offlineMessage
+        collectEmailOffline = c.collectEmailOffline
+        requireEmail = c.requireEmail
+        attachmentsEnabled = c.attachmentsEnabled
+        attachmentMaxBytes = c.attachmentMaxBytes
+        attachmentTypes = c.attachmentTypes
+        language = c.language
+        dictionary = c.dictionary
+    }
+}
+
+/// Sohbet bildirimindeki işaret (`addOpenListener`).
+@objc(PZChatPushInfo)
+public final class PZChatPushInfo: NSObject {
+    @objc public let conversationId: String
+    @objc public let seq: Int
+
+    init(_ i: HSChatPushInfo) {
+        conversationId = i.conversationId
+        seq = i.seq
+    }
+}
+
+/**
+ Sohbet olayı. `type`: `message` (message), `typing` (typing, name), `read` (seq), `unread` (unreadCount),
+ `conversation` (conversationId, status, botActive), `connection` (connected), `error` (code, errorMessage).
+ Türe ait olmayan alanlar nil/0/NO'dur; `payload` köprüler için aynı veriyi sözlük olarak taşır.
+ */
+@objc(PZChatEvent)
+public final class PZChatEvent: NSObject {
+    @objc public let type: String
+    @objc public let payload: [String: Any]
+    @objc public let message: PZChatMessage?
+    @objc public let typing: Bool
+    @objc public let name: String?
+    @objc public let seq: Int
+    @objc public let unreadCount: Int
+    @objc public let conversationId: String?
+    @objc public let status: String?
+    @objc public let botActive: Bool
+    @objc public let connected: Bool
+    @objc public let code: String?
+    @objc public let errorMessage: String?
+
+    init(_ e: HSChatEvent) {
+        type = e.type
+        payload = e.payload
+        var message: PZChatMessage?
+        var typing = false, name: String?, seq = 0, unreadCount = 0
+        var conversationId: String?, status: String?, botActive = false, connected = false
+        var code: String?, errorMessage: String?
+        switch e {
+        case let .message(m): message = PZChatMessage(m)
+        case let .typing(t, n): (typing, name) = (t, n)
+        case let .agentRead(s): seq = s
+        case let .unreadCount(c): unreadCount = c
+        case let .conversationUpdated(id, s, bot): (conversationId, status, botActive) = (id, s, bot)
+        case let .connection(c): connected = c
+        case let .error(c, m): (code, errorMessage) = (c, m)
+        }
+        self.message = message
+        self.typing = typing
+        self.name = name
+        self.seq = seq
+        self.unreadCount = unreadCount
+        self.conversationId = conversationId
+        self.status = status
+        self.botActive = botActive
+        self.connected = connected
+        self.code = code
+        self.errorMessage = errorMessage
+    }
+}
+
+/// Canlı sohbet (ADR-0040): `Pushizo.Chat` yüzeyinin tamamı ve hazır sohbet ekranı (`PZChatViewController`).
+/// Completion block'ları ve dinleyiciler ana iş parçacığında çağrılır.
+@objc(PZChat)
+public final class PZChat: NSObject {
+    // MARK: Durum
+
+    /// Bu cihazın ziyaretçi kimliği (sohbet henüz kullanılmadıysa nil).
+    @objc public static var visitorId: String? { Pushizo.Chat.visitorId }
+    /// Son bilinen okunmamış sohbet mesajı sayısı.
+    @objc public static var unreadCount: Int { Pushizo.Chat.unreadCount }
+    /// Canlı dinleme açık mı.
+    @objc public static var isListening: Bool { Pushizo.Chat.isListening }
+
+    // MARK: Dinleyiciler
+
+    @objc(addListener:)
+    @discardableResult
+    public static func addListener(_ listener: @escaping (PZChatEvent) -> Void) -> PZListenerToken {
+        let token = Pushizo.Chat.addListener { listener(PZChatEvent($0)) }
+        return PZListenerToken { Pushizo.Chat.removeListener(token) }
+    }
+
+    /// `[token remove]` ile aynı.
+    @objc(removeListener:)
+    public static func removeListener(_ token: PZListenerToken) { token.remove() }
+
+    /// Sohbet bildirimine tıklama; dinleyici yokken gelen tıklama ilk dinleyiciye iletilir.
+    @objc(addOpenListener:)
+    @discardableResult
+    public static func addOpenListener(_ listener: @escaping (PZChatPushInfo) -> Void) -> PZListenerToken {
+        let token = Pushizo.Chat.addOpenListener { listener(PZChatPushInfo($0)) }
+        return PZListenerToken { Pushizo.Chat.removeOpenListener(token) }
+    }
+
+    @objc(removeOpenListener:)
+    public static func removeOpenListener(_ token: PZListenerToken) { token.remove() }
+
+    // MARK: Kimlik ve okuma
+
+    /// Sohbeti etkinleştirir ve ziyaretçiyi kullanıcıya/push aboneliğine bağlar.
+    @objc(startWithName:email:language:completion:)
+    public static func start(name: String?, email: String?, language: String?, completion: ((PZChatIdentifyResult?, NSError?) -> Void)?) {
+        complete(completion ?? { _, _ in }) { PZChatIdentifyResult(try await Pushizo.Chat.start(name: name, email: email, language: language)) }
+    }
+
+    /// Ziyaretçi bilgisini (ad, e-posta, dil) günceller.
+    @objc(identifyWithName:email:language:completion:)
+    public static func identify(name: String?, email: String?, language: String?, completion: ((PZChatIdentifyResult?, NSError?) -> Void)?) {
+        complete(completion ?? { _, _ in }) { PZChatIdentifyResult(try await Pushizo.Chat.identify(name: name, email: email, language: language)) }
+    }
+
+    @objc(getConfigWithLanguage:completion:)
+    public static func getConfig(language: String?, completion: @escaping (PZChatConfig?, NSError?) -> Void) {
+        complete(completion) { PZChatConfig(try await Pushizo.Chat.getConfig(language: language)) }
+    }
+
+    @objc(getConversationWithCompletion:)
+    public static func getConversation(completion: @escaping (PZChatConversationState?, NSError?) -> Void) {
+        complete(completion) { PZChatConversationState(try await Pushizo.Chat.getConversation()) }
+    }
+
+    /// `afterSeq` / `beforeSeq` nil olabilir (`NSNumber`); `limit` 1-100.
+    @objc(getMessagesAfterSeq:beforeSeq:limit:completion:)
+    public static func getMessages(afterSeq: NSNumber?, beforeSeq: NSNumber?, limit: Int, completion: @escaping (PZChatMessagePage?, NSError?) -> Void) {
+        complete(completion) {
+            PZChatMessagePage(try await Pushizo.Chat.getMessages(afterSeq: afterSeq?.intValue, beforeSeq: beforeSeq?.intValue, limit: limit))
+        }
+    }
+
+    /// Okunmamış sayısını sunucudan yeniler (`NSNumber`).
+    @objc(refreshUnreadCountWithCompletion:)
+    public static func refreshUnreadCount(completion: ((NSNumber?, NSError?) -> Void)?) {
+        complete(completion ?? { _, _ in }) { NSNumber(value: try await Pushizo.Chat.refreshUnreadCount()) }
+    }
+
+    // MARK: Gönderim
+
+    /// Mesaj gönderir; `optionId` bot sorusunda seçilen hızlı yanıttır. Ağ yoksa `pending` yerel mesaj döner.
+    @objc(sendMessage:optionId:completion:)
+    public static func sendMessage(_ text: String, optionId: String?, completion: ((PZChatMessage?, NSError?) -> Void)?) {
+        complete(completion ?? { _, _ in }) { PZChatMessage(try await Pushizo.Chat.sendMessage(text, optionId: optionId)) }
+    }
+
+    /// Ek gönderir (PNG/JPEG/WebP/GIF/PDF/düz metin, en çok 10 MB).
+    @objc(sendAttachmentData:fileName:mimeType:text:completion:)
+    public static func sendAttachment(_ data: Data, fileName: String, mimeType: String, text: String?, completion: ((PZChatMessage?, NSError?) -> Void)?) {
+        complete(completion ?? { _, _ in }) {
+            PZChatMessage(try await Pushizo.Chat.sendAttachment(data, fileName: fileName, mimeType: mimeType, text: text))
+        }
+    }
+
+    /// Yerel dosya adresinden ek gönderir (ad dosya adından alınır).
+    @objc(sendAttachmentFileURL:mimeType:text:completion:)
+    public static func sendAttachment(fileURL: URL, mimeType: String, text: String?, completion: ((PZChatMessage?, NSError?) -> Void)?) {
+        complete(completion ?? { _, _ in }) {
+            PZChatMessage(try await Pushizo.Chat.sendAttachment(fileURL: fileURL, mimeType: mimeType, text: text))
+        }
+    }
+
+    /// Çevrimdışıyken e-postayla mesaj bırakır.
+    @objc(leaveOfflineMessageWithEmail:text:name:completion:)
+    public static func leaveOfflineMessage(email: String, text: String, name: String?, completion: ((PZChatMessage?, NSError?) -> Void)?) {
+        complete(completion ?? { _, _ in }) { PZChatMessage(try await Pushizo.Chat.leaveOfflineMessage(email: email, text: text, name: name)) }
+    }
+
+    /// `seq` numarasına kadar okundu işaretler; kalan okunmamış sayısı `NSNumber` olarak döner.
+    @objc(markRead:completion:)
+    public static func markRead(_ seq: Int, completion: ((NSNumber?, NSError?) -> Void)?) {
+        complete(completion ?? { _, _ in }) { NSNumber(value: try await Pushizo.Chat.markRead(seq)) }
+    }
+
+    @objc public static func setTyping(_ typing: Bool) { Pushizo.Chat.setTyping(typing) }
+
+    // MARK: Canlı akış ve ekler
+
+    @objc public static func startListening() { Pushizo.Chat.startListening() }
+    @objc public static func stopListening() { Pushizo.Chat.stopListening() }
+
+    /// Ek dosyasının adresi (ziyaretçi belirtecini taşır; loglamayın). SDK başlatılmadıysa nil ve `error`.
+    @objc(attachmentUrl:download:error:)
+    public static func attachmentUrl(_ attachmentId: String, download: Bool) throws -> URL {
+        do { return try Pushizo.Chat.attachmentUrl(attachmentId, download: download) } catch { throw PZErrors.bridge(error) }
+    }
+
+    // MARK: Hazır ekran
+
+    /// Sohbet ekranını modal açar; `presenter` nil ise en üstteki görünüm denetleyicisi kullanılır.
+    @objc(showFromViewController:animated:)
+    public static func show(from presenter: UIViewController?, animated: Bool) { Pushizo.Chat.show(from: presenter, animated: animated) }
+
+    @objc public static func show() { Pushizo.Chat.show() }
+
+    @objc(hideAnimated:)
+    public static func hide(animated: Bool) { Pushizo.Chat.hide(animated: animated) }
+
+    @objc public static func hide() { Pushizo.Chat.hide() }
+
+    @objc public static var isPresented: Bool { Pushizo.Chat.isPresented }
 }
 
 @objc(PZPlacements)

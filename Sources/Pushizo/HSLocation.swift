@@ -25,6 +25,16 @@ extension Pushizo {
         /// Paylaşım açık mı (kalıcı tercih; izin durumundan bağımsız).
         public static var isShared: Bool { storage?.locationShared ?? false }
 
+        /// Konum izni ("kullanırken" veya "her zaman") verilmiş mi; istem göstermez.
+        public static var permissionGranted: Bool {
+            HSLocationController.isGranted(CLLocationManager().authorizationStatus)
+        }
+
+        /// Arka plan ("her zaman") konum izni verilmiş mi (bölge izleme için gerekir); istem göstermez.
+        public static var backgroundPermissionGranted: Bool {
+            CLLocationManager().authorizationStatus == .authorizedAlways
+        }
+
         /// Paylaşımı açar/kapatır. Açılırken izin varsa konum hemen gönderilir; kapatılınca `location: null` gönderilir.
         public static func setShared(_ shared: Bool) {
             guard let store = storage else {
@@ -347,7 +357,7 @@ final class HSLocationController: NSObject, CLLocationManagerDelegate {
     }
 }
 
-/// Açıklama uyarısı metinleri (cihaz dili Türkçe ise Türkçe, değilse İngilizce; Android SDK metinleriyle aynı).
+/// Açıklama uyarısı metinleri (cihaz dili; 22 dil `HSStrings`, Android SDK metinleriyle aynı kaynak).
 struct HSLocationTexts {
     let title: String
     let message: String
@@ -355,19 +365,11 @@ struct HSLocationTexts {
     let cancel: String
 
     static var current: HSLocationTexts {
-        let language = Locale.preferredLanguages.first?.lowercased() ?? "en"
-        return language.hasPrefix("tr")
-            ? HSLocationTexts(
-                title: "Konumunuzu paylaşın",
-                message: "Yakınınızdaki ilgili bildirimleri gönderebilmek için yaklaşık konumunuzu yalnızca uygulama açıkken kullanırız. Bu ayarı istediğiniz zaman kapatabilirsiniz.",
-                accept: "Devam",
-                cancel: "Şimdi değil"
-            )
-            : HSLocationTexts(
-                title: "Share your location",
-                message: "We use your approximate location only while the app is open, to send you relevant nearby notifications. You can turn this off at any time.",
-                accept: "Continue",
-                cancel: "Not now"
-            )
+        HSLocationTexts(
+            title: HSStrings.text("location_rationale_title"),
+            message: HSStrings.text("location_rationale_message"),
+            accept: HSStrings.text("location_rationale_continue"),
+            cancel: HSStrings.text("location_rationale_not_now")
+        )
     }
 }

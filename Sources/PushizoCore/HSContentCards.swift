@@ -63,3 +63,51 @@ public enum HSContentCardParser {
         )
     }
 }
+
+/// Hazır kart görünümünün (HSContentCardsView) arayüzden bağımsız yerleşim kuralları (ADR-0082).
+public enum HSContentCardLayout {
+    public enum Part: Equatable { case image, text, button }
+
+    /// Klasik kart metin (+düğme); görselli kartta görsel üstte; yalnız görsel kartta metin yok. Görseli olmayan
+    /// görsel kartı metne düşer (boş kart gösterilmez).
+    public static func parts(_ card: HSContentCard) -> [Part] {
+        let hasImage = !(card.imageUrl ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+        let hasText = !(card.title ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+            || !(card.body ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+        var result: [Part] = []
+        switch card.type {
+        case .imageOnly: result.append(hasImage ? .image : .text)
+        case .captionedImage:
+            if hasImage { result.append(.image) }
+            if hasText || !hasImage { result.append(.text) }
+        case .classic: result.append(.text)
+        }
+        if result.contains(.text), !(card.buttonText ?? "").trimmingCharacters(in: .whitespaces).isEmpty { result.append(.button) }
+        return result
+    }
+
+    /// Kartın en az yarısı görünürse gösterim sayılır.
+    public static func countsAsImpression(visibleHeight: Double, totalHeight: Double) -> Bool {
+        totalHeight > 0 && visibleHeight * 2 >= totalHeight
+    }
+}
+
+/// Hazır kart görünümü metinleri (22 dil, `HSStrings`; dil verilmezse cihaz dili).
+public struct HSContentCardStrings: Equatable {
+    public let empty: String
+    public let error: String
+    public let retry: String
+    public let dismiss: String
+    public let pinned: String
+
+    public static func forLanguage(_ language: String?) -> HSContentCardStrings {
+        let code = language.map(HSStrings.resolve) ?? HSStrings.deviceLanguage
+        return HSContentCardStrings(
+            empty: HSStrings.text("cards_empty", language: code),
+            error: HSStrings.text("cards_error", language: code),
+            retry: HSStrings.text("cards_retry", language: code),
+            dismiss: HSStrings.text("cards_dismiss", language: code),
+            pinned: HSStrings.text("cards_pinned", language: code)
+        )
+    }
+}

@@ -14,7 +14,7 @@
 **Pushizo iOS SDK** — Swift package for APNs registration, users, tags and aliases, events, in-app messages, Live Activities and delivery receipts. Swift 5.9, iOS 15+ and Mac Catalyst 15+. Add `Pushizo` to the app target and `PushizoExtension` to the Notification Service Extension.
 
 ```swift
-.package(url: "https://github.com/pushizo/pushizo-ios", from: "0.2.0")
+.package(url: "https://github.com/pushizo/pushizo-ios", from: "0.3.0")
 ```
 
 ```ruby
@@ -43,11 +43,11 @@ Swift paketi. Swift 5.9, iOS 15+ ve Mac Catalyst 15+.
 ## Kurulum
 
 **Swift Package Manager:** Xcode → File → Add Package Dependencies →
-`https://github.com/pushizo/pushizo-ios` (Up to Next Major, `0.2.0`). Uygulama hedefine `Pushizo`, NSE hedefine
+`https://github.com/pushizo/pushizo-ios` (Up to Next Major, `0.3.0`). Uygulama hedefine `Pushizo`, NSE hedefine
 `PushizoExtension` ekleyin. `Package.swift` ile:
 
 ```swift
-.package(url: "https://github.com/pushizo/pushizo-ios", from: "0.2.0")
+.package(url: "https://github.com/pushizo/pushizo-ios", from: "0.3.0")
 ```
 
 **CocoaPods:**
@@ -65,7 +65,7 @@ end
 toplamı vardır; SPM `binaryTarget` veya Xcode'da **Embed & Sign** ile kullanılır. Yerelde: `scripts/build-xcframework.sh`.
 
 **Objective-C:** `@import Pushizo;` ile `PZ` önekli cephe (`PZPushizo`, `PZUser`, `PZNotifications`, `PZInbox`,
-`PZFeatureFlags`, `PZPlacements`…). Ayrıntı: [docs.pushizo.com/docs/sdk/ios](https://docs.pushizo.com/docs/sdk/ios).
+`PZFeatureFlags`, `PZPlacements`, `PZChat`…). Ayrıntı: [docs.pushizo.com/docs/sdk/ios](https://docs.pushizo.com/docs/sdk/ios).
 
 ## Başlatma
 
@@ -75,6 +75,14 @@ Pushizo.initialize("app_…", launchOptions: launchOptions)
 func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
     Pushizo.setDeviceToken(deviceToken)
 }
+```
+
+```swift
+try Pushizo.login("user_42", profile: HSUserProfile(email: "ali@pushizo.com", tags: ["plan": "pro"]))   // giriş + profil
+Pushizo.User.setProperty("first_name", "Ali")
+let inboxToken = Pushizo.Inbox.addObserver { event in badge.count = event.unreadCount }
+let flagToken = Pushizo.FeatureFlags.addObserver { render() }
+Pushizo.Chat.show()                                  // hazır sohbet ekranı (HSChatViewController / HSChatView)
 ```
 
 APNs anahtarı, Xcode yetenekleri, NSE kurulumu ve tüm API: [docs.pushizo.com/docs/sdk/ios](https://docs.pushizo.com/docs/sdk/ios).

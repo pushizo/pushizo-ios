@@ -310,7 +310,6 @@ final class HSCarouselView: UIView, UIScrollViewDelegate {
     }
 
     static func cardLabel(index: Int, total: Int, title: String) -> String {
-        let turkish = (Locale.preferredLanguages.first ?? "en").lowercased().hasPrefix("tr")
-        return turkish ? "Kart \(index)/\(total): \(title)" : "Card \(index)/\(total): \(title)"
+        HSStrings.text("in_app_carousel_card", args: ["n": String(index), "total": String(total), "title": title])
     }
 }

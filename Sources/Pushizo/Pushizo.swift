@@ -114,7 +114,7 @@ public enum HSLog {
  ```
  */
 public enum Pushizo {
-    public static let sdkVersion = "0.2.0"
+    public static let sdkVersion = "0.3.0"
     static var appId = ""
     static var options = HSOptions()
     static var storage: HSStorage?
@@ -133,6 +133,9 @@ public enum Pushizo {
     static let foregroundListeners = HSListenerRegistry<HSForegroundEvent>()
     static let permissionTracker = HSPermissionTracker()
     static let subscriptionObservers = HSListenerRegistry<HSPushSubscriptionState>()
+    static let featureFlagObservers = HSListenerRegistry<Void>()
+    static let inboxObservers = HSListenerRegistry<HSInboxChangeEvent>()
+    static let inboxTracker = HSInboxTracker()
     private static let authorizationLock = NSLock()
     private static var cachedAuthorizationStatus: UNAuthorizationStatus?
     static var pendingClick: HSClickEvent?
@@ -531,7 +534,7 @@ public enum Pushizo {
         case "tags", "properties":
             // Kullanıcı kimliği abonelik kaydıyla gelir; o zamana kadar işlem yerinde bekler, sonrakiler engellenmez.
             guard let userId = store.userId else { throw HSQueueDeferred("kullanıcı yok") }
-            var body: [String: Any] = op["type"] as? String == "tags" ? ["tags": HSQueue.tagsBody(op)] : ["properties": op["properties"] ?? [:]]
+            var body: [String: Any] = op["type"] as? String == "tags" ? ["tags": HSQueue.tagsBody(op)] : ["properties": HSUserProperties.body(op)]
             if let hash = store.userIdentityHash { body["identity_hash"] = hash }
             let result = try await api.request("PATCH", "/users/\(userId)", body: body)
             store.tags = result["tags"] as? [String: String] ?? store.tags
@@ -790,10 +793,30 @@ public enum Pushizo {
      başlığıyla gider; süresi dolunca `updateUserJwt(_:)` ile yenilenir.
      */
     public static func login(_ externalId: String, identityHash: String? = nil, jwt: String? = nil) {
-        guard let store = storage, api != nil else { return }
+        guard storage != nil, api != nil else { return }
         if let message = loginProofError(identityHash: identityHash, jwt: jwt) {
             HSLog.log(.error, message); return
         }
+        beginLogin(externalId, identityHash: identityHash, jwt: jwt, then: [])
+    }
+
+    /**
+     Kullanıcıyı kimliklendirir ve `profile` alanlarını (e-posta, SMS, tag, alias) tek çağrıda ayarlar. Kimlik kanıtı
+     diğer `login` ile aynıdır. Profil ya da kanıt geçersizse `HSError.invalidArgument` fırlatılır ve giriş yapılmaz
+     (yarım kalmış kimlik değişimi olmaz); SDK başlatılmadıysa `HSError.notInitialized`. Profil işlemleri girişten sonra
+     kuyruğa yazılır: adresler ve tag'ler kimlikli kullanıcıya bağlanır.
+     */
+    public static func login(_ externalId: String, profile: HSUserProfile, identityHash: String? = nil, jwt: String? = nil) throws {
+        guard storage != nil, api != nil else { throw HSError.notInitialized }
+        guard !externalId.isEmpty else { throw HSError.invalidArgument("externalId gerekli") }
+        if let message = profile.validationError { throw HSError.invalidArgument(message) }
+        if let message = loginProofError(identityHash: identityHash, jwt: jwt) { throw HSError.invalidArgument(message) }
+        beginLogin(externalId, identityHash: identityHash, jwt: jwt, then: profile.operations())
+    }
+
+    /// Girişi başlatır; `operations` giriş tamamlandıktan (ya da onay beklenirken kimlik yerelde yazıldıktan) sonra kuyruğa alınır.
+    private static func beginLogin(_ externalId: String, identityHash: String?, jwt: String?, then operations: [[String: Any]]) {
+        guard let store = storage else { return }
         // JWT bu girişin isteğinde de başlıkta gitmelidir: istekten önce saklanır.
         store.identityJwt = (jwt ?? "").isEmpty ? nil : jwt
         guard networkAllowed else {
@@ -803,9 +826,14 @@ public enum Pushizo {
             store.userIdentityHash = identityHash
             store.pendingIdentityOperation = "login"
             inApp.reset()
+            inboxTracker.reset()
+            operations.forEach(enqueue)
             return
         }
-        Task { await performLogin(externalId: externalId, identityHash: identityHash) }
+        Task {
+            await performLogin(externalId: externalId, identityHash: identityHash)
+            operations.forEach(enqueue)
+        }
     }
 
     static func performLogin(externalId: String, identityHash: String?) async {
@@ -835,6 +863,7 @@ public enum Pushizo {
             if let token = store.deviceToken { await registerIfNeeded(token: token) }
         }
         inApp.reset()
+        inboxTracker.reset()
         inApp.onSubscriptionChanged()
         await flushQueue()
         // Canlı sohbet ziyaretçisi giriş yapan kullanıcıya bağlanır (sohbet kullanılıyorsa).
@@ -851,6 +880,7 @@ public enum Pushizo {
             store.clearIdentity()
             store.pendingIdentityOperation = hadSubscription ? "logout" : nil
             inApp.reset()
+            inboxTracker.reset()
             return
         }
         Task { await performLogout() }
@@ -884,6 +914,7 @@ public enum Pushizo {
             store.clearIdentity()
         }
         inApp.reset()
+        inboxTracker.reset()
         inApp.onSubscriptionChanged()
     }
 
@@ -930,6 +961,19 @@ public enum Pushizo {
             enqueue(["type": "alias_remove", "label": label, "at": Date().timeIntervalSince1970])
         }
         public static func setLanguage(_ code: String) { enqueue(["type": "properties", "properties": ["language": code], "at": Date().timeIntervalSince1970]) }
+
+        /**
+         Kullanıcı özelliği yazar (ör. `setProperty("first_name", "Ali")`); `nil` özelliği siler. Değer metin, sayı,
+         mantıksal ya da bunların dizisi/sözlüğü olabilir; desteklenmeyen değer ve boş/64 karakterden uzun anahtar günlüğe
+         yazılıp yok sayılır. Çevrimdışıyken kuyrukta bekler.
+         */
+        public static func setProperty(_ key: String, _ value: Any?) {
+            guard let op = HSUserProperties.operation(key: key, value: value) else {
+                HSLog.log(.error, "geçersiz kullanıcı özelliği: anahtar 1-64 karakter; değer metin, sayı, mantıksal, dizi veya sözlük")
+                return
+            }
+            enqueue(op)
+        }
 
         /// E-posta aboneliği ekler (küçük harfe çevrilir); geçersiz adres günlüğe yazılıp yok sayılır. Çevrimdışıyken kuyrukta bekler.
         public static func addEmail(_ email: String) {
@@ -1202,8 +1246,12 @@ public enum Pushizo {
     }
 
     public enum Session {
-        public static func sendEvent(_ name: String, properties: [String: Any] = [:], value: Double? = nil) {
-            var op: [String: Any] = ["type": "event", "name": name, "properties": properties, "occurred_at": ISO8601DateFormatter().string(from: Date()), "event_id": UUID().uuidString.lowercased(), "at": Date().timeIntervalSince1970]
+        /**
+         Özel olay gönderir. `eventId` (isteğe bağlı) tekilleştirme kimliğidir: aynı olay yeniden gönderilirse sunucu ikinci
+         kez kaydetmez. 8-64 karakter, harf, rakam ve `._:-`; verilmezse ya da biçim geçersizse SDK kendi kimliğini üretir.
+         */
+        public static func sendEvent(_ name: String, properties: [String: Any] = [:], value: Double? = nil, eventId: String? = nil) {
+            var op: [String: Any] = ["type": "event", "name": name, "properties": properties, "occurred_at": ISO8601DateFormatter().string(from: Date()), "event_id": HSEventId.resolve(eventId), "at": Date().timeIntervalSince1970]
             if let value { op["value"] = value }
             enqueue(op)
             inApp.onEvent(name)
@@ -1298,6 +1346,7 @@ public enum Pushizo {
             do {
                 guard let flags = HSFeatureFlagRules.parse(try await api.request("POST", "/feature-flags/evaluate", body: body)) else { return false }
                 store.featureFlags = flags
+                DispatchQueue.main.async { featureFlagObservers.notify(()) }
                 return true
             } catch {
                 HSLog.log(.debug, "özellik bayrakları alınamadı: \(error.localizedDescription)")
@@ -1314,6 +1363,17 @@ public enum Pushizo {
         public static func value(_ key: String, default fallback: Any? = nil) -> Any? {
             HSFeatureFlagRules.value(storage?.featureFlags, key: key) ?? fallback
         }
+
+        /// `value(_:default:)` ile aynı (Web ve Android SDK'larındaki `getValue` adı).
+        public static func getValue(_ key: String, default fallback: Any? = nil) -> Any? { value(key, default: fallback) }
+
+        /// Bayrak değerleri sunucudan her yenilendiğinde (oturum başı ve `refresh()`) ana iş parçacığında çağrılır.
+        @discardableResult
+        public static func addObserver(_ observer: @escaping () -> Void) -> HSListenerToken {
+            featureFlagObservers.add { _ in observer() }
+        }
+
+        public static func removeObserver(_ token: HSListenerToken) { _ = featureFlagObservers.remove(token) }
     }
 
     public enum Inbox {
@@ -1347,8 +1407,32 @@ public enum Pushizo {
             guard (1...200).contains(limit) else { throw HSError.invalidArgument("limit 1-200 olmalı") }
             let (c, api) = try ctx()
             let path = "\(base(c))?\(query(c))&limit=\(limit)" + (cursor.map { "&cursor=\(enc($0))" } ?? "")
-            return HSInboxParser.parsePage(try await api.request("GET", path))
+            let page = HSInboxParser.parsePage(try await api.request("GET", path))
+            notify(inboxTracker.listed(page, firstPage: cursor == nil))
+            return page
         }
+
+        /// Okunmamış sayısını önbelleğe dokunmadan sunucudan okur.
+        private static func fetchCount() async throws -> Int {
+            let (c, api) = try ctx()
+            return HSInboxParser.parsePage(try await api.request("GET", "\(base(c))?\(query(c))&limit=1")).unreadCount
+        }
+
+        private static func notify(_ event: HSInboxChangeEvent?) {
+            guard let event, !inboxObservers.isEmpty else { return }
+            DispatchQueue.main.async { inboxObservers.notify(event) }
+        }
+
+        /**
+         Kutu değişim gözlemcisi (ana iş parçacığında): `listed`/`count` yalnızca okunmamış sayısı değiştiğinde,
+         `read`/`readAll`/`archived` her işlemde bildirilir. Rozet güncellemek için kullanılır.
+         */
+        @discardableResult
+        public static func addObserver(_ observer: @escaping (HSInboxChangeEvent) -> Void) -> HSListenerToken {
+            inboxObservers.add(observer)
+        }
+
+        public static func removeObserver(_ token: HSListenerToken) { _ = inboxObservers.remove(token) }
 
         /// Okundu işaretler; güncel öğeyi döndürür.
         @discardableResult
@@ -1357,6 +1441,9 @@ public enum Pushizo {
             guard let item = HSInboxParser.parseItem(try await api.request("POST", "\(base(c))/\(enc(id))/read", body: body(c))) else {
                 throw HSError.invalidResponse
             }
+            let local = inboxTracker.countAfterRead(id)
+            // Sayı yerelde bilinmiyorsa sunucudan okunur; okuma hatası okundu işaretini geri almaz.
+            if let count = local != nil ? local : try? await fetchCount() { notify(inboxTracker.read(id, unreadCount: count)) }
             return item
         }
 
@@ -1364,17 +1451,25 @@ public enum Pushizo {
         @discardableResult
         public static func markAllRead() async throws -> Int {
             let (c, api) = try ctx()
-            return (try await api.request("POST", "\(base(c))/read-all", body: body(c))["unread_count"] as? NSNumber)?.intValue ?? 0
+            let count = (try await api.request("POST", "\(base(c))/read-all", body: body(c))["unread_count"] as? NSNumber)?.intValue ?? 0
+            notify(inboxTracker.readAll(unreadCount: count))
+            return count
         }
 
         /// Öğeyi kutudan kaldırır (arşivler).
         public static func archive(_ id: String) async throws {
             let (c, api) = try ctx()
+            let local = inboxTracker.countAfterArchive(id)
             try await api.request("DELETE", "\(base(c))/\(enc(id))?\(query(c))")
+            if let count = local != nil ? local : try? await fetchCount() { notify(inboxTracker.archived(id, unreadCount: count)) }
         }
 
         /// Okunmamış öğe sayısı.
-        public static func unreadCount() async throws -> Int { try await list(limit: 1).unreadCount }
+        public static func unreadCount() async throws -> Int {
+            let count = try await fetchCount()
+            notify(inboxTracker.counted(count))
+            return count
+        }
     }
 
     /// İçerik kartları (ADR-0082): kalıcı kart akışı (`content_card` mesajları). Kartlar bildirim kutusu listesinde
@@ -1457,7 +1552,7 @@ final class HSNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
 
     /// Pushizo bildirimiyse ön plan kararını verir (tamamlama tam bir kez) ve true döner; değilse dokunmaz.
     func handleWillPresent(_ notification: UNNotification, completion: @escaping (UNNotificationPresentationOptions) -> Void) -> Bool {
-        guard let n = HSNotification(userInfo: notification.request.content.userInfo) else { return false }
+        guard let n = HSNotification(userInfo: notification.request.content.userInfo, identifier: notification.request.identifier) else { return false }
         if let id = n.deliveryId { Pushizo.reportReceived(id) }
         // Canlı sohbet bildirimi (`pushizo_chat`): okunmamış sayısı yenilenir.
         Pushizo.Chat.onPushReceived(notification.request.content.userInfo)
@@ -1476,7 +1571,7 @@ final class HSNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
 
     /// Pushizo bildirimiyse tıklama/kapatmayı işler, tamamlamayı çağırır ve true döner; değilse dokunmaz.
     func handleDidReceive(_ response: UNNotificationResponse, completion: @escaping () -> Void) -> Bool {
-        guard let n = HSNotification(userInfo: response.notification.request.content.userInfo) else { return false }
+        guard let n = HSNotification(userInfo: response.notification.request.content.userInfo, identifier: response.notification.request.identifier) else { return false }
         switch response.actionIdentifier {
         case UNNotificationDismissActionIdentifier:
             Pushizo.reportDismissed(n)

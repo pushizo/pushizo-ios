@@ -19,7 +19,7 @@
 @implementation PZObjCFacadeTests
 
 - (void)testSurumVeBaslatmaDurumu {
-    XCTAssertEqualObjects(PZPushizo.sdkVersion, @"0.2.0");
+    XCTAssertEqualObjects(PZPushizo.sdkVersion, @"0.3.0");
     XCTAssertFalse(PZPushizo.isInitialized);
     XCTAssertEqualObjects(PZErrors.domain, @"PZErrorDomain");
 }

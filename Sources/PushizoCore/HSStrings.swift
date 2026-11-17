@@ -140,8 +140,8 @@ public enum HSStrings {
             "cards_dismiss": "Dispensar cartão",
             "cards_pinned": "Fixado",
             "delivery_title": "Não perca notificações",
-            "delivery_message": "As configurações de bateria deste aparelho podem atrasar as notificações. Para recebê-las na hora, permita que o app funcione em segundo plano sem restrições de bateria.",
-            "delivery_message_vendor": "Este aparelho pode encerrar apps em segundo plano, então as notificações podem chegar atrasadas ou nem chegar. Para recebê-las na hora, ative a inicialização automática deste app e remova as restrições de bateria.",
+            "delivery_message": "As configurações de bateria deste dispositivo podem atrasar as notificações. Para recebê-las na hora, permita que o app funcione em segundo plano sem restrições de bateria.",
+            "delivery_message_vendor": "Este dispositivo pode encerrar apps em segundo plano, então as notificações podem chegar atrasadas ou nem chegar. Para recebê-las na hora, ative a inicialização automática deste app e remova as restrições de bateria.",
             "delivery_open_settings": "Abrir configurações",
         ],
         "nl": [
@@ -442,7 +442,7 @@ public enum HSStrings {
             "delivery_title": "Nu ratați notificările",
             "delivery_message": "Setările bateriei de pe acest dispozitiv pot întârzia notificările. Pentru a le primi la timp, permiteți aplicației să ruleze în fundal fără restricții de baterie.",
             "delivery_message_vendor": "Acest dispozitiv poate opri aplicațiile din fundal, astfel încât notificările pot sosi târziu sau deloc. Pentru a le primi la timp, activați pornirea automată pentru această aplicație și eliminați restricțiile de baterie.",
-            "delivery_open_settings": "Deschideți setările",
+            "delivery_open_settings": "Deschide setările",
         ],
     ]
 

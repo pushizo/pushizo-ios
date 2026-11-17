@@ -31,10 +31,13 @@ public struct HSNotification: Equatable {
     public let badgeSet: Int?
     /// `hs.carousel` görsel adresleri.
     public let carousel: [String]
+    /// Bildirim isteğinin kimliği (`UNNotificationRequest.identifier`); `Notifications.removeNotification(identifier:)`
+    /// ile kullanılır. Bildirim sistemden gelmediyse (ör. açılış `launchOptions`) nil.
+    public let identifier: String?
 
     /// `userInfo` sözlüğünden ayrıştırır; Pushizo dışı payload'larda nil döner.
     /// Yeni biçim `hs.dlv`/`hs.msg`/`hs.buttons`; eski `delivery_id`/`message_id`/`actions` alanlarına geri düşer.
-    public init?(userInfo: [AnyHashable: Any]) {
+    public init?(userInfo: [AnyHashable: Any], identifier: String? = nil) {
         let aps = userInfo["aps"] as? [String: Any] ?? [:]
         let hs = userInfo["hs"] as? [String: Any]
         var title: String?
@@ -48,6 +51,7 @@ public struct HSNotification: Equatable {
         if hs == nil && title == nil && body == nil { return nil }
         self.title = title
         self.body = body
+        self.identifier = (identifier ?? "").isEmpty ? nil : identifier
         self.imageUrl = HSNotification.string(hs?["image"])
         self.url = HSNotification.string(hs?["url"])
         self.deliveryId = HSNotification.string(hs?["dlv"]) ?? HSNotification.string(hs?["delivery_id"])

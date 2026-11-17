@@ -25,6 +25,16 @@ extension Pushizo {
         /// Paylaşım açık mı (kalıcı tercih; izin durumundan bağımsız).
         public static var isShared: Bool { storage?.locationShared ?? false }
 
+        /// Konum izni ("kullanırken" veya "her zaman") verilmiş mi; istem göstermez.
+        public static var permissionGranted: Bool {
+            HSLocationController.isGranted(CLLocationManager().authorizationStatus)
+        }
+
+        /// Arka plan ("her zaman") konum izni verilmiş mi (bölge izleme için gerekir); istem göstermez.
+        public static var backgroundPermissionGranted: Bool {
+            CLLocationManager().authorizationStatus == .authorizedAlways
+        }
+
         /// Paylaşımı açar/kapatır. Açılırken izin varsa konum hemen gönderilir; kapatılınca `location: null` gönderilir.
         public static func setShared(_ shared: Bool) {
             guard let store = storage else {
